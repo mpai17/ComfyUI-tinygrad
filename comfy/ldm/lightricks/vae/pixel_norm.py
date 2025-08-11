@@ -1,12 +1,10 @@
-import torch
-from torch import nn
+from tinygrad import Tensor
 
 
-class PixelNorm(nn.Module):
+class PixelNorm:
     def __init__(self, dim=1, eps=1e-8):
-        super(PixelNorm, self).__init__()
         self.dim = dim
         self.eps = eps
 
     def forward(self, x):
-        return x / torch.sqrt(torch.mean(x**2, dim=self.dim, keepdim=True) + self.eps)
+        return x / (x**2).mean(axis=self.dim, keepdim=True).add(self.eps).sqrt()

@@ -1,10 +1,9 @@
-import torch
+from tinygrad import Tensor, dtypes, nn
 from comfy.ldm.modules.attention import optimized_attention_for_device
 import comfy.ops
 
-class CLIPAttention(torch.nn.Module):
+class CLIPAttention:
     def __init__(self, embed_dim, heads, dtype, device, operations):
-        super().__init__()
 
         self.heads = heads
         self.q_proj = operations.Linear(embed_dim, embed_dim, bias=True, dtype=dtype, device=device)
@@ -21,14 +20,13 @@ class CLIPAttention(torch.nn.Module):
         out = optimized_attention(q, k, v, self.heads, mask)
         return self.out_proj(out)
 
-ACTIVATIONS = {"quick_gelu": lambda a: a * torch.sigmoid(1.702 * a),
-               "gelu": torch.nn.functional.gelu,
-               "gelu_pytorch_tanh": lambda a: torch.nn.functional.gelu(a, approximate="tanh"),
+ACTIVATIONS = {"quick_gelu": lambda a: a * (1.702 * a).sigmoid(),
+               "gelu": lambda a: a.gelu(),
+               "gelu_pytorch_tanh": lambda a: a.gelu(),
 }
 
-class CLIPMLP(torch.nn.Module):
+class CLIPMLP:
     def __init__(self, embed_dim, intermediate_size, activation, dtype, device, operations):
-        super().__init__()
         self.fc1 = operations.Linear(embed_dim, intermediate_size, bias=True, dtype=dtype, device=device)
         self.activation = ACTIVATIONS[activation]
         self.fc2 = operations.Linear(intermediate_size, embed_dim, bias=True, dtype=dtype, device=device)
@@ -39,9 +37,8 @@ class CLIPMLP(torch.nn.Module):
         x = self.fc2(x)
         return x
 
-class CLIPLayer(torch.nn.Module):
+class CLIPLayer:
     def __init__(self, embed_dim, heads, intermediate_size, intermediate_activation, dtype, device, operations):
-        super().__init__()
         self.layer_norm1 = operations.LayerNorm(embed_dim, dtype=dtype, device=device)
         self.self_attn = CLIPAttention(embed_dim, heads, dtype, device, operations)
         self.layer_norm2 = operations.LayerNorm(embed_dim, dtype=dtype, device=device)
@@ -53,10 +50,9 @@ class CLIPLayer(torch.nn.Module):
         return x
 
 
-class CLIPEncoder(torch.nn.Module):
+class CLIPEncoder:
     def __init__(self, num_layers, embed_dim, heads, intermediate_size, intermediate_activation, dtype, device, operations):
-        super().__init__()
-        self.layers = torch.nn.ModuleList([CLIPLayer(embed_dim, heads, intermediate_size, intermediate_activation, dtype, device, operations) for i in range(num_layers)])
+        self.layers = [CLIPLayer(embed_dim, heads, intermediate_size, intermediate_activation, dtype, device, operations) for i in range(num_layers)]
 
     def forward(self, x, mask=None, intermediate_output=None):
         optimized_attention = optimized_attention_for_device(x.device, mask=mask is not None, small_input=True)
@@ -72,17 +68,16 @@ class CLIPEncoder(torch.nn.Module):
                 intermediate = x.clone()
         return x, intermediate
 
-class CLIPEmbeddings(torch.nn.Module):
+class CLIPEmbeddings:
     def __init__(self, embed_dim, vocab_size=49408, num_positions=77, dtype=None, device=None, operations=None):
-        super().__init__()
         self.token_embedding = operations.Embedding(vocab_size, embed_dim, dtype=dtype, device=device)
         self.position_embedding = operations.Embedding(num_positions, embed_dim, dtype=dtype, device=device)
 
-    def forward(self, input_tokens, dtype=torch.float32):
+    def forward(self, input_tokens, dtype=dtypes.float32):
         return self.token_embedding(input_tokens, out_dtype=dtype) + comfy.ops.cast_to(self.position_embedding.weight, dtype=dtype, device=input_tokens.device)
 
 
-class CLIPTextModel_(torch.nn.Module):
+class CLIPTextModel_:
     def __init__(self, config_dict, dtype, device, operations):
         num_layers = config_dict["num_hidden_layers"]
         embed_dim = config_dict["hidden_size"]
@@ -92,12 +87,11 @@ class CLIPTextModel_(torch.nn.Module):
         num_positions = config_dict["max_position_embeddings"]
         self.eos_token_id = config_dict["eos_token_id"]
 
-        super().__init__()
         self.embeddings = CLIPEmbeddings(embed_dim, num_positions=num_positions, dtype=dtype, device=device, operations=operations)
         self.encoder = CLIPEncoder(num_layers, embed_dim, heads, intermediate_size, intermediate_activation, dtype, device, operations)
         self.final_layer_norm = operations.LayerNorm(embed_dim, dtype=dtype, device=device)
 
-    def forward(self, input_tokens=None, attention_mask=None, embeds=None, num_tokens=None, intermediate_output=None, final_layer_norm_intermediate=True, dtype=torch.float32, embeds_info=[]):
+    def forward(self, input_tokens=None, attention_mask=None, embeds=None, num_tokens=None, intermediate_output=None, final_layer_norm_intermediate=True, dtype=dtypes.float32):
         if embeds is not None:
             x = embeds + comfy.ops.cast_to(self.embeddings.position_embedding.weight, dtype=dtype, device=embeds.device)
         else:
@@ -106,9 +100,9 @@ class CLIPTextModel_(torch.nn.Module):
         mask = None
         if attention_mask is not None:
             mask = 1.0 - attention_mask.to(x.dtype).reshape((attention_mask.shape[0], 1, -1, attention_mask.shape[-1])).expand(attention_mask.shape[0], 1, attention_mask.shape[-1], attention_mask.shape[-1])
-            mask = mask.masked_fill(mask.to(torch.bool), -torch.finfo(x.dtype).max)
+            mask = mask.where(mask == 0, -float('inf'))
 
-        causal_mask = torch.full((x.shape[1], x.shape[1]), -torch.finfo(x.dtype).max, dtype=x.dtype, device=x.device).triu_(1)
+        causal_mask = Tensor.full((x.shape[1], x.shape[1]), -float('inf'), dtype=x.dtype).triu(1)
 
         if mask is not None:
             mask += causal_mask
@@ -123,12 +117,11 @@ class CLIPTextModel_(torch.nn.Module):
         if num_tokens is not None:
             pooled_output = x[list(range(x.shape[0])), list(map(lambda a: a - 1, num_tokens))]
         else:
-            pooled_output = x[torch.arange(x.shape[0], device=x.device), (torch.round(input_tokens).to(dtype=torch.int, device=x.device) == self.eos_token_id).int().argmax(dim=-1),]
+            pooled_output = x[Tensor.arange(x.shape[0]), (input_tokens.round().cast(dtypes.int32) == self.eos_token_id).cast(dtypes.int32).argmax(axis=-1)]
         return x, i, pooled_output
 
-class CLIPTextModel(torch.nn.Module):
+class CLIPTextModel:
     def __init__(self, config_dict, dtype, device, operations):
-        super().__init__()
         self.num_layers = config_dict["num_hidden_layers"]
         self.text_model = CLIPTextModel_(config_dict, dtype, device, operations)
         embed_dim = config_dict["hidden_size"]
@@ -147,9 +140,8 @@ class CLIPTextModel(torch.nn.Module):
         return (x[0], x[1], out, x[2])
 
 
-class CLIPVisionEmbeddings(torch.nn.Module):
+class CLIPVisionEmbeddings:
     def __init__(self, embed_dim, num_channels=3, patch_size=14, image_size=224, model_type="", dtype=None, device=None, operations=None):
-        super().__init__()
 
         num_patches = (image_size // patch_size) ** 2
         if model_type == "siglip_vision_model":
@@ -157,7 +149,7 @@ class CLIPVisionEmbeddings(torch.nn.Module):
             patch_bias = True
         else:
             num_patches = num_patches + 1
-            self.class_embedding = torch.nn.Parameter(torch.empty(embed_dim, dtype=dtype, device=device))
+            self.class_embedding = Tensor.empty(embed_dim, dtype=dtype)
             patch_bias = False
 
         self.patch_embedding = operations.Conv2d(
@@ -175,13 +167,12 @@ class CLIPVisionEmbeddings(torch.nn.Module):
     def forward(self, pixel_values):
         embeds = self.patch_embedding(pixel_values).flatten(2).transpose(1, 2)
         if self.class_embedding is not None:
-            embeds = torch.cat([comfy.ops.cast_to_input(self.class_embedding, embeds).expand(pixel_values.shape[0], 1, -1), embeds], dim=1)
+            embeds = Tensor.cat([comfy.ops.cast_to_input(self.class_embedding, embeds).expand(pixel_values.shape[0], 1, -1), embeds], dim=1)
         return embeds + comfy.ops.cast_to_input(self.position_embedding.weight, embeds)
 
 
-class CLIPVision(torch.nn.Module):
+class CLIPVision:
     def __init__(self, config_dict, dtype, device, operations):
-        super().__init__()
         num_layers = config_dict["num_hidden_layers"]
         embed_dim = config_dict["hidden_size"]
         heads = config_dict["num_attention_heads"]
@@ -211,18 +202,16 @@ class CLIPVision(torch.nn.Module):
             pooled_output = self.post_layernorm(x[:, 0, :])
         return x, i, pooled_output
 
-class LlavaProjector(torch.nn.Module):
+class LlavaProjector:
     def __init__(self, in_dim, out_dim, dtype, device, operations):
-        super().__init__()
         self.linear_1 = operations.Linear(in_dim, out_dim, bias=True, device=device, dtype=dtype)
         self.linear_2 = operations.Linear(out_dim, out_dim, bias=True, device=device, dtype=dtype)
 
     def forward(self, x):
-        return self.linear_2(torch.nn.functional.gelu(self.linear_1(x[:, 1:])))
+        return self.linear_2(self.linear_1(x[:, 1:]).gelu())
 
-class CLIPVisionModelProjection(torch.nn.Module):
+class CLIPVisionModelProjection:
     def __init__(self, config_dict, dtype, device, operations):
-        super().__init__()
         self.vision_model = CLIPVision(config_dict, dtype, device, operations)
         if "projection_dim" in config_dict:
             self.visual_projection = operations.Linear(config_dict["hidden_size"], config_dict["projection_dim"], bias=False)

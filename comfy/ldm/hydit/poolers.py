@@ -1,12 +1,10 @@
-import torch
-import torch.nn as nn
+from tinygrad import Tensor
 from comfy.ldm.modules.attention import optimized_attention
 import comfy.ops
 
-class AttentionPool(nn.Module):
+class AttentionPool:
     def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None, dtype=None, device=None, operations=None):
-        super().__init__()
-        self.positional_embedding = nn.Parameter(torch.empty(spacial_dim + 1, embed_dim, dtype=dtype, device=device))
+        self.positional_embedding = Tensor.empty(spacial_dim + 1, embed_dim, dtype=dtype)
         self.k_proj = operations.Linear(embed_dim, embed_dim, dtype=dtype, device=device)
         self.q_proj = operations.Linear(embed_dim, embed_dim, dtype=dtype, device=device)
         self.v_proj = operations.Linear(embed_dim, embed_dim, dtype=dtype, device=device)
@@ -17,7 +15,7 @@ class AttentionPool(nn.Module):
     def forward(self, x):
         x = x[:,:self.positional_embedding.shape[0] - 1]
         x = x.permute(1, 0, 2)  # NLC -> LNC
-        x = torch.cat([x.mean(dim=0, keepdim=True), x], dim=0)  # (L+1)NC
+        x = Tensor.cat([x.mean(axis=0, keepdim=True), x], dim=0)  # (L+1)NC
         x = x + comfy.ops.cast_to_input(self.positional_embedding[:, None, :], x) # (L+1)NC
 
         q = self.q_proj(x[:1])

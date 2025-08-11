@@ -1,9 +1,9 @@
-import torch
+from tinygrad import Tensor
 import comfy.ops
 
 ops = comfy.ops.manual_cast
 
-class ReduxImageEncoder(torch.nn.Module):
+class ReduxImageEncoder:
     def __init__(
         self,
         redux_dim: int = 1152,
@@ -11,7 +11,6 @@ class ReduxImageEncoder(torch.nn.Module):
         device=None,
         dtype=None,
     ) -> None:
-        super().__init__()
 
         self.redux_dim = redux_dim
         self.device = device
@@ -20,6 +19,6 @@ class ReduxImageEncoder(torch.nn.Module):
         self.redux_up = ops.Linear(redux_dim, txt_in_features * 3, dtype=dtype)
         self.redux_down = ops.Linear(txt_in_features * 3, txt_in_features, dtype=dtype)
 
-    def forward(self, sigclip_embeds) -> torch.Tensor:
-        projected_x = self.redux_down(torch.nn.functional.silu(self.redux_up(sigclip_embeds)))
+    def forward(self, sigclip_embeds) -> Tensor:
+        projected_x = self.redux_down(self.redux_up(sigclip_embeds).silu())
         return projected_x

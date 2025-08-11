@@ -1,4 +1,4 @@
-import torch
+from tinygrad import Tensor
 import numpy as np
 
 
@@ -24,39 +24,32 @@ class DiracDistribution(AbstractDistribution):
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
         self.parameters = parameters
-        self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
-        self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
+        self.mean, self.logvar = parameters.chunk(2, dim=1)
+        self.logvar = self.logvar.clip(-30.0, 20.0)
         self.deterministic = deterministic
-        self.std = torch.exp(0.5 * self.logvar)
-        self.var = torch.exp(self.logvar)
+        self.std = (0.5 * self.logvar).exp()
+        self.var = self.logvar.exp()
         if self.deterministic:
-            self.var = self.std = torch.zeros_like(self.mean, device=self.parameters.device)
+            self.var = self.std = Tensor.zeros_like(self.mean)
 
     def sample(self):
-        x = self.mean + self.std * torch.randn(self.mean.shape, device=self.parameters.device)
+        x = self.mean + self.std * Tensor.randn(*self.mean.shape)
         return x
 
     def kl(self, other=None):
         if self.deterministic:
-            return torch.Tensor([0.])
+            return Tensor([0.])
         else:
             if other is None:
-                return 0.5 * torch.sum(torch.pow(self.mean, 2)
-                                       + self.var - 1.0 - self.logvar,
-                                       dim=[1, 2, 3])
+                return 0.5 * ((self.mean ** 2) + self.var - 1.0 - self.logvar).sum(axis=(1, 2, 3))
             else:
-                return 0.5 * torch.sum(
-                    torch.pow(self.mean - other.mean, 2) / other.var
-                    + self.var / other.var - 1.0 - self.logvar + other.logvar,
-                    dim=[1, 2, 3])
+                return 0.5 * (((self.mean - other.mean) ** 2) / other.var + self.var / other.var - 1.0 - self.logvar + other.logvar).sum(axis=(1, 2, 3))
 
     def nll(self, sample, dims=[1,2,3]):
         if self.deterministic:
-            return torch.Tensor([0.])
+            return Tensor([0.])
         logtwopi = np.log(2.0 * np.pi)
-        return 0.5 * torch.sum(
-            logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-            dim=dims)
+        return 0.5 * (logtwopi + self.logvar + ((sample - self.mean) ** 2) / self.var).sum(axis=dims)
 
     def mode(self):
         return self.mean
@@ -71,7 +64,7 @@ def normal_kl(mean1, logvar1, mean2, logvar2):
     """
     tensor = None
     for obj in (mean1, logvar1, mean2, logvar2):
-        if isinstance(obj, torch.Tensor):
+        if isinstance(obj, Tensor):
             tensor = obj
             break
     assert tensor is not None, "at least one argument must be a Tensor"
@@ -79,7 +72,7 @@ def normal_kl(mean1, logvar1, mean2, logvar2):
     # Force variances to be Tensors. Broadcasting helps convert scalars to
     # Tensors, but it does not work for torch.exp().
     logvar1, logvar2 = [
-        x if isinstance(x, torch.Tensor) else torch.tensor(x).to(tensor)
+        x if isinstance(x, Tensor) else Tensor([x])
         for x in (logvar1, logvar2)
     ]
 
@@ -87,6 +80,6 @@ def normal_kl(mean1, logvar1, mean2, logvar2):
         -1.0
         + logvar2
         - logvar1
-        + torch.exp(logvar1 - logvar2)
-        + ((mean1 - mean2) ** 2) * torch.exp(-logvar2)
+        + (logvar1 - logvar2).exp()
+        + ((mean1 - mean2) ** 2) * (-logvar2).exp()
     )

@@ -16,14 +16,12 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import torch
-import torch.nn as nn
+from tinygrad import Tensor
 from comfy.ldm.modules.attention import optimized_attention
 import comfy.ops
 
-class OptimizedAttention(nn.Module):
+class OptimizedAttention:
     def __init__(self, c, nhead, dropout=0.0, dtype=None, device=None, operations=None):
-        super().__init__()
         self.heads = nhead
 
         self.to_q = operations.Linear(c, c, bias=True, dtype=dtype, device=device)
@@ -41,9 +39,8 @@ class OptimizedAttention(nn.Module):
 
         return self.out_proj(out)
 
-class Attention2D(nn.Module):
+class Attention2D:
     def __init__(self, c, nhead, dropout=0.0, dtype=None, device=None, operations=None):
-        super().__init__()
         self.attn = OptimizedAttention(c, nhead, dtype=dtype, device=device, operations=operations)
         # self.attn = nn.MultiheadAttention(c, nhead, dropout=dropout, bias=True, batch_first=True, dtype=dtype, device=device)
 
@@ -51,7 +48,7 @@ class Attention2D(nn.Module):
         orig_shape = x.shape
         x = x.view(x.size(0), x.size(1), -1).permute(0, 2, 1)  # Bx4xHxW -> Bx(HxW)x4
         if self_attn:
-            kv = torch.cat([x, kv], dim=1)
+            kv = Tensor.cat([x, kv], dim=1)
         # x = self.attn(x, kv, kv, need_weights=False)[0]
         x = self.attn(x, kv, kv)
         x = x.permute(0, 2, 1).view(*orig_shape)
@@ -67,79 +64,80 @@ def LayerNorm2d_op(operations):
             return super().forward(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
     return LayerNorm2d
 
-class GlobalResponseNorm(nn.Module):
+class GlobalResponseNorm:
     "from https://github.com/facebookresearch/ConvNeXt-V2/blob/3608f67cc1dae164790c5d0aead7bf2d73d9719b/models/utils.py#L105"
     def __init__(self, dim, dtype=None, device=None):
-        super().__init__()
-        self.gamma = nn.Parameter(torch.empty(1, 1, 1, dim, dtype=dtype, device=device))
-        self.beta = nn.Parameter(torch.empty(1, 1, 1, dim, dtype=dtype, device=device))
+        self.gamma = Tensor.empty(1, 1, 1, dim, dtype=dtype)
+        self.beta = Tensor.empty(1, 1, 1, dim, dtype=dtype)
 
     def forward(self, x):
-        Gx = torch.norm(x, p=2, dim=(1, 2), keepdim=True)
+        Gx = (x ** 2).sum(axis=(1, 2), keepdim=True).sqrt()
         Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
         return comfy.ops.cast_to_input(self.gamma, x) * (x * Nx) + comfy.ops.cast_to_input(self.beta, x) + x
 
 
-class ResBlock(nn.Module):
+class ResBlock:
     def __init__(self, c, c_skip=0, kernel_size=3, dropout=0.0, dtype=None, device=None, operations=None):  # , num_heads=4, expansion=2):
-        super().__init__()
         self.depthwise = operations.Conv2d(c, c, kernel_size=kernel_size, padding=kernel_size // 2, groups=c, dtype=dtype, device=device)
         #         self.depthwise = SAMBlock(c, num_heads, expansion)
         self.norm = LayerNorm2d_op(operations)(c, elementwise_affine=False, eps=1e-6, dtype=dtype, device=device)
-        self.channelwise = nn.Sequential(
-            operations.Linear(c + c_skip, c * 4, dtype=dtype, device=device),
-            nn.GELU(),
-            GlobalResponseNorm(c * 4, dtype=dtype, device=device),
-            nn.Dropout(dropout),
-            operations.Linear(c * 4, c, dtype=dtype, device=device)
-        )
+        self.linear1 = operations.Linear(c + c_skip, c * 4, dtype=dtype, device=device)
+        self.gelu = lambda x: x.gelu()
+        self.grn = GlobalResponseNorm(c * 4, dtype=dtype, device=device)
+        self.dropout = lambda x: x  # Dropout placeholder
+        self.linear2 = operations.Linear(c * 4, c, dtype=dtype, device=device)
 
     def forward(self, x, x_skip=None):
         x_res = x
         x = self.norm(self.depthwise(x))
         if x_skip is not None:
-            x = torch.cat([x, x_skip], dim=1)
-        x = self.channelwise(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+            x = Tensor.cat([x, x_skip], dim=1)
+        x = x.permute(0, 2, 3, 1)
+        x = self.linear1(x)
+        x = self.gelu(x)
+        x = self.grn(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        x = x.permute(0, 3, 1, 2)
         return x + x_res
 
 
-class AttnBlock(nn.Module):
+class AttnBlock:
     def __init__(self, c, c_cond, nhead, self_attn=True, dropout=0.0, dtype=None, device=None, operations=None):
-        super().__init__()
         self.self_attn = self_attn
         self.norm = LayerNorm2d_op(operations)(c, elementwise_affine=False, eps=1e-6, dtype=dtype, device=device)
         self.attention = Attention2D(c, nhead, dropout, dtype=dtype, device=device, operations=operations)
-        self.kv_mapper = nn.Sequential(
-            nn.SiLU(),
-            operations.Linear(c_cond, c, dtype=dtype, device=device)
-        )
+        self.silu = lambda x: x.silu()
+        self.kv_linear = operations.Linear(c_cond, c, dtype=dtype, device=device)
 
     def forward(self, x, kv):
-        kv = self.kv_mapper(kv)
+        kv = self.kv_linear(self.silu(kv))
         x = x + self.attention(self.norm(x), kv, self_attn=self.self_attn)
         return x
 
 
-class FeedForwardBlock(nn.Module):
+class FeedForwardBlock:
     def __init__(self, c, dropout=0.0, dtype=None, device=None, operations=None):
-        super().__init__()
         self.norm = LayerNorm2d_op(operations)(c, elementwise_affine=False, eps=1e-6, dtype=dtype, device=device)
-        self.channelwise = nn.Sequential(
-            operations.Linear(c, c * 4, dtype=dtype, device=device),
-            nn.GELU(),
-            GlobalResponseNorm(c * 4, dtype=dtype, device=device),
-            nn.Dropout(dropout),
-            operations.Linear(c * 4, c, dtype=dtype, device=device)
-        )
+        self.ff_linear1 = operations.Linear(c, c * 4, dtype=dtype, device=device)
+        self.ff_gelu = lambda x: x.gelu()
+        self.ff_grn = GlobalResponseNorm(c * 4, dtype=dtype, device=device)
+        self.ff_dropout = lambda x: x  # Dropout placeholder
+        self.ff_linear2 = operations.Linear(c * 4, c, dtype=dtype, device=device)
 
     def forward(self, x):
-        x = x + self.channelwise(self.norm(x).permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        norm_x = self.norm(x).permute(0, 2, 3, 1)
+        ff_x = self.ff_linear1(norm_x)
+        ff_x = self.ff_gelu(ff_x)
+        ff_x = self.ff_grn(ff_x)
+        ff_x = self.ff_dropout(ff_x)
+        ff_x = self.ff_linear2(ff_x)
+        x = x + ff_x.permute(0, 3, 1, 2)
         return x
 
 
-class TimestepBlock(nn.Module):
+class TimestepBlock:
     def __init__(self, c, c_timestep, conds=['sca'], dtype=None, device=None, operations=None):
-        super().__init__()
         self.mapper = operations.Linear(c_timestep, c * 2, dtype=dtype, device=device)
         self.conds = conds
         for cname in conds:

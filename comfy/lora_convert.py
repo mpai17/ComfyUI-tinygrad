@@ -1,4 +1,4 @@
-import torch
+from tinygrad import Tensor
 import comfy.utils
 
 
@@ -8,7 +8,7 @@ def convert_lora_bfl_control(sd): #BFL loras for Flux
         k_to = "diffusion_model.{}".format(k.replace(".lora_B.bias", ".diff_b").replace("_norm.scale", "_norm.scale.set_weight"))
         sd_out[k_to] = sd[k]
 
-    sd_out["diffusion_model.img_in.reshape_weight"] = torch.tensor([sd["img_in.lora_B.weight"].shape[0], sd["img_in.lora_A.weight"].shape[1]])
+    sd_out["diffusion_model.img_in.reshape_weight"] = Tensor([sd["img_in.lora_B.weight"].shape[0], sd["img_in.lora_A.weight"].shape[1]])
     return sd_out
 
 

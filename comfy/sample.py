@@ -1,4 +1,5 @@
-import torch
+from tinygrad import Tensor
+import numpy as np
 import comfy.model_management
 import comfy.samplers
 import comfy.utils
@@ -10,23 +11,24 @@ def prepare_noise(latent_image, seed, noise_inds=None):
     creates random noise given a latent image and a seed.
     optional arg skip can be used to skip and discard x number of noise generations for a given seed
     """
-    generator = torch.manual_seed(seed)
+    # Tinygrad uses numpy for random seed handling
+    np.random.seed(seed)
     if noise_inds is None:
-        return torch.randn(latent_image.size(), dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device="cpu")
+        return Tensor.randn(*latent_image.shape, dtype=latent_image.dtype)
 
     unique_inds, inverse = np.unique(noise_inds, return_inverse=True)
     noises = []
     for i in range(unique_inds[-1]+1):
-        noise = torch.randn([1] + list(latent_image.size())[1:], dtype=latent_image.dtype, layout=latent_image.layout, generator=generator, device="cpu")
+        noise = Tensor.randn(1, *latent_image.shape[1:], dtype=latent_image.dtype)
         if i in unique_inds:
             noises.append(noise)
     noises = [noises[i] for i in inverse]
-    noises = torch.cat(noises, axis=0)
+    noises = Tensor.cat(noises, dim=0)
     return noises
 
 def fix_empty_latent_channels(model, latent_image):
     latent_format = model.get_model_object("latent_format") #Resize the empty latent image so it has the right number of channels
-    if latent_format.latent_channels != latent_image.shape[1] and torch.count_nonzero(latent_image) == 0:
+    if latent_format.latent_channels != latent_image.shape[1] and (latent_image != 0).sum() == 0:
         latent_image = comfy.utils.repeat_to_batch_size(latent_image, latent_format.latent_channels, dim=1)
     if latent_format.latent_dimensions == 3 and latent_image.ndim == 4:
         latent_image = latent_image.unsqueeze(2)

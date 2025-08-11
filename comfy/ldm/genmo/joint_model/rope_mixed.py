@@ -3,7 +3,7 @@
 # import functools
 import math
 
-import torch
+from tinygrad import Tensor
 
 
 def centers(start: float, stop, num, dtype=None, device=None):
@@ -13,13 +13,13 @@ def centers(start: float, stop, num, dtype=None, device=None):
         start (float): Start of the range.
         stop (float): End of the range.
         num (int): Number of points.
-        dtype (torch.dtype): Data type of the points.
-        device (torch.device): Device of the points.
+        dtype: Data type of the points.
+        device: Device of the points (ignored in tinygrad).
 
     Returns:
         centers (Tensor): Centers of the bins. Shape: (num,).
     """
-    edges = torch.linspace(start, stop, num + 1, dtype=dtype, device=device)
+    edges = Tensor.linspace(start, stop, num + 1, dtype=dtype)
     return (edges[:-1] + edges[1:]) / 2
 
 
@@ -28,8 +28,8 @@ def create_position_matrix(
     T: int,
     pH: int,
     pW: int,
-    device: torch.device,
-    dtype: torch.dtype,
+    device,  # ignored in tinygrad
+    dtype,
     *,
     target_area: float = 36864,
 ):
@@ -43,7 +43,7 @@ def create_position_matrix(
         pos: [T * pH * pW, 3] - position matrix
     """
     # Create 1D tensors for each dimension
-    t = torch.arange(T, dtype=dtype)
+    t = Tensor.arange(T, dtype=dtype)
 
     # Positionally interpolate to area 36864.
     # (3072x3072 frame with 16x16 patches = 192x192 latents).
@@ -55,19 +55,22 @@ def create_position_matrix(
     h = centers(-pH * scale / 2, pH * scale / 2, pH)
 
     # Use meshgrid to create 3D grids
-    grid_t, grid_h, grid_w = torch.meshgrid(t, h, w, indexing="ij")
+    # tinygrad meshgrid equivalent
+    grid_t = t.reshape(T, 1, 1).expand(T, pH, pW)
+    grid_h = h.reshape(1, pH, 1).expand(T, pH, pW)
+    grid_w = w.reshape(1, 1, pW).expand(T, pH, pW)
 
     # Stack and reshape the grids.
-    pos = torch.stack([grid_t, grid_h, grid_w], dim=-1)  # [T, pH, pW, 3]
+    pos = Tensor.stack([grid_t, grid_h, grid_w], dim=-1)  # [T, pH, pW, 3]
     pos = pos.view(-1, 3)  # [T * pH * pW, 3]
-    pos = pos.to(dtype=dtype, device=device)
+    pos = pos.cast(dtype)
 
     return pos
 
 
 def compute_mixed_rotation(
-    freqs: torch.Tensor,
-    pos: torch.Tensor,
+    freqs: Tensor,
+    pos: Tensor,
 ):
     """
     Project each 3-dim position into per-head, per-head-dim 1D frequencies.
@@ -82,7 +85,7 @@ def compute_mixed_rotation(
         freqs_sin: [N, num_heads, num_freqs] - sine components
     """
     assert freqs.ndim == 3
-    freqs_sum = torch.einsum("Nd,dhf->Nhf", pos.to(freqs), freqs)
-    freqs_cos = torch.cos(freqs_sum)
-    freqs_sin = torch.sin(freqs_sum)
+    freqs_sum = pos.cast(freqs.dtype).unsqueeze(-1) * freqs.unsqueeze(0)
+    freqs_cos = freqs_sum.cos()
+    freqs_sin = freqs_sum.sin()
     return freqs_cos, freqs_sin

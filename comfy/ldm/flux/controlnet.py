@@ -1,9 +1,8 @@
 #Original code can be found on: https://github.com/XLabs-AI/x-flux/blob/main/src/flux/controlnet.py
 #modified to support different types of flux controlnets
 
-import torch
 import math
-from torch import Tensor, nn
+from tinygrad import Tensor
 from einops import rearrange, repeat
 
 from .layers import (timestep_embedding)
@@ -11,47 +10,42 @@ from .layers import (timestep_embedding)
 from .model import Flux
 import comfy.ldm.common_dit
 
-class MistolineCondDownsamplBlock(nn.Module):
+class MistolineCondDownsamplBlock:
     def __init__(self, dtype=None, device=None, operations=None):
-        super().__init__()
-        self.encoder = nn.Sequential(
+        # Sequential layers stored as list
+        self.encoder_layers = [
             operations.Conv2d(3, 16, 3, padding=1, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 1, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, stride=2, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, stride=2, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, stride=2, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 1, dtype=dtype, device=device),
-            nn.SiLU(),
             operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device)
-        )
+        ]
 
-    def forward(self, x):
-        return self.encoder(x)
+    def __call__(self, x):
+        # Apply sequential layers with SiLU activation between them
+        for layer in self.encoder_layers:
+            x = layer(x)
+            x = x.silu()
+        return x
 
-class MistolineControlnetBlock(nn.Module):
+class MistolineControlnetBlock:
     def __init__(self, hidden_size, dtype=None, device=None, operations=None):
-        super().__init__()
         self.linear = operations.Linear(hidden_size, hidden_size, dtype=dtype, device=device)
-        self.act = nn.SiLU()
 
-    def forward(self, x):
-        return self.act(self.linear(x))
+    def __call__(self, x):
+        return self.linear(x).silu()
 
 
 class ControlNetFlux(Flux):
     def __init__(self, latent_input=False, num_union_modes=0, mistoline=False, control_latent_channels=None, image_model=None, dtype=None, device=None, operations=None, **kwargs):
-        super().__init__(final_layer=False, dtype=dtype, device=device, operations=operations, **kwargs)
+        # Initialize Flux parent without final layer
+        kwargs['final_layer'] = False
+        Flux.__init__(self, dtype=dtype, device=device, operations=operations, **kwargs)
 
         self.main_model_double = 19
         self.main_model_single = 38
@@ -63,11 +57,11 @@ class ControlNetFlux(Flux):
         else:
             control_block = lambda : operations.Linear(self.hidden_size, self.hidden_size, dtype=dtype, device=device)
 
-        self.controlnet_blocks = nn.ModuleList([])
+        self.controlnet_blocks = []
         for _ in range(self.params.depth):
             self.controlnet_blocks.append(control_block())
 
-        self.controlnet_single_blocks = nn.ModuleList([])
+        self.controlnet_single_blocks = []
         for _ in range(self.params.depth_single_blocks):
             self.controlnet_single_blocks.append(control_block())
 
@@ -88,25 +82,26 @@ class ControlNetFlux(Flux):
             if self.mistoline:
                 self.input_cond_block = MistolineCondDownsamplBlock(dtype=dtype, device=device, operations=operations)
             else:
-                self.input_hint_block = nn.Sequential(
+                self.input_hint_block_layers = [
                     operations.Conv2d(3, 16, 3, padding=1, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, stride=2, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, stride=2, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, stride=2, dtype=dtype, device=device),
-                    nn.SiLU(),
                     operations.Conv2d(16, 16, 3, padding=1, dtype=dtype, device=device)
-                )
+                ]
 
-    def forward_orig(
+    def input_hint_block(self, x):
+        """Apply input hint block layers sequentially with SiLU activation"""
+        for i, layer in enumerate(self.input_hint_block_layers):
+            x = layer(x)
+            if i < len(self.input_hint_block_layers) - 1:  # No activation after last layer
+                x = x.silu()
+        return x
+
+    def __call__(
         self,
         img: Tensor,
         img_ids: Tensor,
@@ -122,7 +117,7 @@ class ControlNetFlux(Flux):
             raise ValueError("Input img and txt tensors must have 3 dimensions.")
 
         if y is None:
-            y = torch.zeros((img.shape[0], self.params.vec_in_dim), device=img.device, dtype=img.dtype)
+            y = Tensor.zeros((img.shape[0], self.params.vec_in_dim), dtype=img.dtype)
         else:
             y = y[:, :self.params.vec_in_dim]
 
@@ -138,11 +133,12 @@ class ControlNetFlux(Flux):
         txt = self.txt_in(txt)
 
         if self.controlnet_mode_embedder is not None and len(control_type) > 0:
-            control_cond = self.controlnet_mode_embedder(torch.tensor(control_type, device=img.device), out_dtype=img.dtype).unsqueeze(0).repeat((txt.shape[0], 1, 1))
-            txt = torch.cat([control_cond, txt], dim=1)
-            txt_ids = torch.cat([txt_ids[:,:1], txt_ids], dim=1)
+            control_type_tensor = Tensor(control_type, dtype=Tensor.default_int)
+            control_cond = self.controlnet_mode_embedder(control_type_tensor).cast(img.dtype).unsqueeze(0).expand((txt.shape[0], 1, -1))
+            txt = Tensor.cat([control_cond, txt], dim=1)
+            txt_ids = Tensor.cat([txt_ids[:,:1], txt_ids], dim=1)
 
-        ids = torch.cat((txt_ids, img_ids), dim=1)
+        ids = Tensor.cat((txt_ids, img_ids), dim=1)
         pe = self.pe_embedder(ids)
 
         controlnet_double = ()
@@ -151,7 +147,7 @@ class ControlNetFlux(Flux):
             img, txt = self.double_blocks[i](img=img, txt=txt, vec=vec, pe=pe)
             controlnet_double = controlnet_double + (self.controlnet_blocks[i](img),)
 
-        img = torch.cat((txt, img), 1)
+        img = Tensor.cat((txt, img), 1)
 
         controlnet_single = ()
 
@@ -199,10 +195,10 @@ class ControlNetFlux(Flux):
 
         h_len = ((h + (patch_size // 2)) // patch_size)
         w_len = ((w + (patch_size // 2)) // patch_size)
-        img_ids = torch.zeros((h_len, w_len, 3), device=x.device, dtype=x.dtype)
-        img_ids[..., 1] = img_ids[..., 1] + torch.linspace(0, h_len - 1, steps=h_len, device=x.device, dtype=x.dtype)[:, None]
-        img_ids[..., 2] = img_ids[..., 2] + torch.linspace(0, w_len - 1, steps=w_len, device=x.device, dtype=x.dtype)[None, :]
+        img_ids = Tensor.zeros((h_len, w_len, 3), dtype=x.dtype)
+        img_ids[..., 1] = img_ids[..., 1] + Tensor.arange(0, h_len, dtype=x.dtype).unsqueeze(1)
+        img_ids[..., 2] = img_ids[..., 2] + Tensor.arange(0, w_len, dtype=x.dtype).unsqueeze(0)
         img_ids = repeat(img_ids, "h w c -> b (h w) c", b=bs)
 
-        txt_ids = torch.zeros((bs, context.shape[1], 3), device=x.device, dtype=x.dtype)
-        return self.forward_orig(img, img_ids, hint, context, txt_ids, timesteps, y, guidance, control_type=kwargs.get("control_type", []))
+        txt_ids = Tensor.zeros((bs, context.shape[1], 3), dtype=x.dtype)
+        return self.__call__(img, img_ids, hint, context, txt_ids, timesteps, y, guidance, control_type=kwargs.get("control_type", []))

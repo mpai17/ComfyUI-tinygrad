@@ -1,6 +1,6 @@
 import logging
 import math
-import torch
+from tinygrad import Tensor
 from contextlib import contextmanager
 from typing import Any, Dict, Tuple, Union
 
@@ -10,15 +10,14 @@ from comfy.ldm.util import get_obj_from_str, instantiate_from_config
 from comfy.ldm.modules.ema import LitEma
 import comfy.ops
 
-class DiagonalGaussianRegularizer(torch.nn.Module):
+class DiagonalGaussianRegularizer:
     def __init__(self, sample: bool = False):
-        super().__init__()
         self.sample = sample
 
     def get_trainable_parameters(self) -> Any:
         yield from ()
 
-    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+    def forward(self, z: Tensor) -> Tuple[Tensor, dict]:
         posterior = DiagonalGaussianDistribution(z)
         if self.sample:
             z = posterior.sample()
@@ -27,7 +26,7 @@ class DiagonalGaussianRegularizer(torch.nn.Module):
         return z, None
 
 
-class AbstractAutoencoder(torch.nn.Module):
+class AbstractAutoencoder:
     """
     This is the base class for all autoencoders, including image autoencoders, image autoencoders with discriminators,
     unCLIP models, etc. Hence, it is fairly general, and specific features
@@ -41,7 +40,6 @@ class AbstractAutoencoder(torch.nn.Module):
         input_key: str = "jpg",
         **kwargs,
     ):
-        super().__init__()
 
         self.input_key = input_key
         self.use_ema = ema_decay is not None
@@ -75,10 +73,10 @@ class AbstractAutoencoder(torch.nn.Module):
                 if context is not None:
                     logging.info(f"{context}: Restored training weights")
 
-    def encode(self, *args, **kwargs) -> torch.Tensor:
+    def encode(self, *args, **kwargs) -> Tensor:
         raise NotImplementedError("encode()-method of abstract base class called")
 
-    def decode(self, *args, **kwargs) -> torch.Tensor:
+    def decode(self, *args, **kwargs) -> Tensor:
         raise NotImplementedError("decode()-method of abstract base class called")
 
     def instantiate_optimizer_from_config(self, params, lr, cfg):
@@ -108,8 +106,8 @@ class AutoencodingEngine(AbstractAutoencoder):
     ):
         super().__init__(*args, **kwargs)
 
-        self.encoder: torch.nn.Module = instantiate_from_config(encoder_config)
-        self.decoder: torch.nn.Module = instantiate_from_config(decoder_config)
+        self.encoder = instantiate_from_config(encoder_config)
+        self.decoder = instantiate_from_config(decoder_config)
         self.regularization = instantiate_from_config(
             regularizer_config
         )
@@ -119,10 +117,10 @@ class AutoencodingEngine(AbstractAutoencoder):
 
     def encode(
         self,
-        x: torch.Tensor,
+        x: Tensor,
         return_reg_log: bool = False,
         unregularized: bool = False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
+    ) -> Union[Tensor, Tuple[Tensor, dict]]:
         z = self.encoder(x)
         if unregularized:
             return z, dict()
@@ -131,13 +129,13 @@ class AutoencodingEngine(AbstractAutoencoder):
             return z, reg_log
         return z
 
-    def decode(self, z: torch.Tensor, **kwargs) -> torch.Tensor:
+    def decode(self, z: Tensor, **kwargs) -> Tensor:
         x = self.decoder(z, **kwargs)
         return x
 
     def forward(
-        self, x: torch.Tensor, **additional_decode_kwargs
-    ) -> Tuple[torch.Tensor, torch.Tensor, dict]:
+        self, x: Tensor, **additional_decode_kwargs
+    ) -> Tuple[Tensor, Tensor, dict]:
         z, reg_log = self.encode(x, return_reg_log=True)
         dec = self.decode(z, **additional_decode_kwargs)
         return z, dec, reg_log
@@ -178,8 +176,8 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
         return params
 
     def encode(
-        self, x: torch.Tensor, return_reg_log: bool = False
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, dict]]:
+        self, x: Tensor, return_reg_log: bool = False
+    ) -> Union[Tensor, Tuple[Tensor, dict]]:
         if self.max_batch_size is None:
             z = self.encoder(x)
             z = self.quant_conv(z)
@@ -192,14 +190,14 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
                 z_batch = self.encoder(x[i_batch * bs : (i_batch + 1) * bs])
                 z_batch = self.quant_conv(z_batch)
                 z.append(z_batch)
-            z = torch.cat(z, 0)
+            z = Tensor.cat(z, 0)
 
         z, reg_log = self.regularization(z)
         if return_reg_log:
             return z, reg_log
         return z
 
-    def decode(self, z: torch.Tensor, **decoder_kwargs) -> torch.Tensor:
+    def decode(self, z, **decoder_kwargs):
         if self.max_batch_size is None:
             dec = self.post_quant_conv(z)
             dec = self.decoder(dec, **decoder_kwargs)
@@ -212,7 +210,7 @@ class AutoencodingEngineLegacy(AutoencodingEngine):
                 dec_batch = self.post_quant_conv(z[i_batch * bs : (i_batch + 1) * bs])
                 dec_batch = self.decoder(dec_batch, **decoder_kwargs)
                 dec.append(dec_batch)
-            dec = torch.cat(dec, 0)
+            dec = Tensor.cat(dec, 0)
 
         return dec
 

@@ -1,6 +1,7 @@
-from .utils import load_torch_file, transformers_convert, state_dict_prefix_replace
+# load_torch_file functionality handled by model loading system
+from .utils import transformers_convert, state_dict_prefix_replace
 import os
-import torch
+from tinygrad import Tensor
 import json
 import logging
 
@@ -19,8 +20,8 @@ class Output:
 
 def clip_preprocess(image, size=224, mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711], crop=True):
     image = image[:, :, :, :3] if image.shape[3] > 3 else image
-    mean = torch.tensor(mean, device=image.device, dtype=image.dtype)
-    std = torch.tensor(std, device=image.device, dtype=image.dtype)
+    mean = Tensor(mean, dtype=image.dtype)
+    std = Tensor(std, dtype=image.dtype)
     image = image.movedim(-1, 1)
     if not (image.shape[2] == size and image.shape[3] == size):
         if crop:
@@ -29,11 +30,11 @@ def clip_preprocess(image, size=224, mean=[0.48145466, 0.4578275, 0.40821073], s
         else:
             scale_size = (size, size)
 
-        image = torch.nn.functional.interpolate(image, size=scale_size, mode="bicubic", antialias=True)
+        image = image.interpolate(mode='bicubic', size=scale_size, antialias=True)
         h = (image.shape[2] - size)//2
         w = (image.shape[3] - size)//2
         image = image[:,:,h:h+size,w:w+size]
-    image = torch.clip((255. * image), 0, 255).round() / 255.0
+    image = (255. * image).clip(0, 255).round() / 255.0
     return (image - mean.view([3,1,1])) / std.view([3,1,1])
 
 IMAGE_ENCODERS = {
@@ -141,7 +142,9 @@ def load_clipvision_from_sd(sd, prefix="", convert_keys=False):
     return clip
 
 def load(ckpt_path):
-    sd = load_torch_file(ckpt_path)
+    # Use ComfyUI's standard loading mechanism
+    import comfy.utils
+    sd = comfy.utils.load_torch_file(ckpt_path)
     if "visual.transformer.resblocks.0.attn.in_proj_weight" in sd:
         return load_clipvision_from_sd(sd, prefix="visual.", convert_keys=True)
     else:

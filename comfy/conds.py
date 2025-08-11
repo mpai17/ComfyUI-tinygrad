@@ -1,4 +1,4 @@
-import torch
+from tinygrad import Tensor
 import math
 import comfy.utils
 import logging
@@ -26,7 +26,7 @@ class CONDRegular:
         conds = [self.cond]
         for x in others:
             conds.append(x.cond)
-        return torch.cat(conds)
+        return Tensor.cat(conds)
 
     def size(self):
         return list(self.cond.size())
@@ -73,7 +73,7 @@ class CONDCrossAttn(CONDRegular):
             if c.shape[1] < crossattn_max_len:
                 c = c.repeat(1, crossattn_max_len // c.shape[1], 1) #padding with repeat doesn't change result
             out.append(c)
-        return torch.cat(out)
+        return Tensor.cat(out)
 
 
 class CONDConstant(CONDRegular):
@@ -121,7 +121,7 @@ class CONDList(CONDRegular):
             o = [self.cond[i]]
             for x in others:
                 o.append(x.cond[i])
-            out.append(torch.cat(o))
+            out.append(Tensor.cat(o))
 
         return out
 

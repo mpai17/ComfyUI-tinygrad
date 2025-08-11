@@ -2,8 +2,7 @@
 
 from dataclasses import dataclass
 
-import torch
-from torch import Tensor, nn
+from tinygrad import Tensor
 from einops import rearrange, repeat
 import comfy.ldm.common_dit
 import comfy.patcher_extension
@@ -35,13 +34,12 @@ class FluxParams:
     guidance_embed: bool
 
 
-class Flux(nn.Module):
+class Flux:
     """
     Transformer model for flow matching on sequences.
     """
 
     def __init__(self, image_model=None, final_layer=True, dtype=None, device=None, operations=None, **kwargs):
-        super().__init__()
         self.dtype = dtype
         params = FluxParams(**kwargs)
         self.params = params
@@ -61,35 +59,32 @@ class Flux(nn.Module):
         self.img_in = operations.Linear(self.in_channels, self.hidden_size, bias=True, dtype=dtype, device=device)
         self.time_in = MLPEmbedder(in_dim=256, hidden_dim=self.hidden_size, dtype=dtype, device=device, operations=operations)
         self.vector_in = MLPEmbedder(params.vec_in_dim, self.hidden_size, dtype=dtype, device=device, operations=operations)
-        self.guidance_in = (
-            MLPEmbedder(in_dim=256, hidden_dim=self.hidden_size, dtype=dtype, device=device, operations=operations) if params.guidance_embed else nn.Identity()
-        )
+        if params.guidance_embed:
+            self.guidance_in = MLPEmbedder(in_dim=256, hidden_dim=self.hidden_size, dtype=dtype, device=device, operations=operations)
+        else:
+            self.guidance_in = None  # Identity will be handled in forward
         self.txt_in = operations.Linear(params.context_in_dim, self.hidden_size, dtype=dtype, device=device)
 
-        self.double_blocks = nn.ModuleList(
-            [
-                DoubleStreamBlock(
-                    self.hidden_size,
-                    self.num_heads,
-                    mlp_ratio=params.mlp_ratio,
-                    qkv_bias=params.qkv_bias,
-                    dtype=dtype, device=device, operations=operations
-                )
-                for _ in range(params.depth)
-            ]
-        )
+        self.double_blocks = [
+            DoubleStreamBlock(
+                self.hidden_size,
+                self.num_heads,
+                mlp_ratio=params.mlp_ratio,
+                qkv_bias=params.qkv_bias,
+                dtype=dtype, device=device, operations=operations
+            )
+            for _ in range(params.depth)
+        ]
 
-        self.single_blocks = nn.ModuleList(
-            [
-                SingleStreamBlock(self.hidden_size, self.num_heads, mlp_ratio=params.mlp_ratio, dtype=dtype, device=device, operations=operations)
-                for _ in range(params.depth_single_blocks)
-            ]
-        )
+        self.single_blocks = [
+            SingleStreamBlock(self.hidden_size, self.num_heads, mlp_ratio=params.mlp_ratio, dtype=dtype, device=device, operations=operations)
+            for _ in range(params.depth_single_blocks)
+        ]
 
         if final_layer:
             self.final_layer = LastLayer(self.hidden_size, 1, self.out_channels, dtype=dtype, device=device, operations=operations)
 
-    def forward_orig(
+    def __call__(
         self,
         img: Tensor,
         img_ids: Tensor,
@@ -104,7 +99,7 @@ class Flux(nn.Module):
     ) -> Tensor:
 
         if y is None:
-            y = torch.zeros((img.shape[0], self.params.vec_in_dim), device=img.device, dtype=img.dtype)
+            y = Tensor.zeros((img.shape[0], self.params.vec_in_dim), dtype=img.dtype)
 
         patches_replace = transformer_options.get("patches_replace", {})
         if img.ndim != 3 or txt.ndim != 3:
@@ -112,16 +107,16 @@ class Flux(nn.Module):
 
         # running on sequences img
         img = self.img_in(img)
-        vec = self.time_in(timestep_embedding(timesteps, 256).to(img.dtype))
+        vec = self.time_in(timestep_embedding(timesteps, 256).cast(img.dtype))
         if self.params.guidance_embed:
             if guidance is not None:
-                vec = vec + self.guidance_in(timestep_embedding(guidance, 256).to(img.dtype))
+                vec = vec + self.guidance_in(timestep_embedding(guidance, 256).cast(img.dtype))
 
         vec = vec + self.vector_in(y[:,:self.params.vec_in_dim])
         txt = self.txt_in(txt)
 
         if img_ids is not None:
-            ids = torch.cat((txt_ids, img_ids), dim=1)
+            ids = Tensor.cat((txt_ids, img_ids), dim=1)
             pe = self.pe_embedder(ids)
         else:
             pe = None
@@ -160,10 +155,10 @@ class Flux(nn.Module):
                     if add is not None:
                         img[:, :add.shape[1]] += add
 
-        if img.dtype == torch.float16:
-            img = torch.nan_to_num(img, nan=0.0, posinf=65504, neginf=-65504)
+        if 'float16' in str(img.dtype):
+            img = img.clip(-65504, 65504)
 
-        img = torch.cat((txt, img), 1)
+        img = Tensor.cat((txt, img), 1)
 
         for i, block in enumerate(self.single_blocks):
             if ("single_block", i) in blocks_replace:
@@ -208,10 +203,10 @@ class Flux(nn.Module):
         h_offset = ((h_offset + (patch_size // 2)) // patch_size)
         w_offset = ((w_offset + (patch_size // 2)) // patch_size)
 
-        img_ids = torch.zeros((h_len, w_len, 3), device=x.device, dtype=x.dtype)
+        img_ids = Tensor.zeros((h_len, w_len, 3), dtype=x.dtype)
         img_ids[:, :, 0] = img_ids[:, :, 1] + index
-        img_ids[:, :, 1] = img_ids[:, :, 1] + torch.linspace(h_offset, h_len - 1 + h_offset, steps=h_len, device=x.device, dtype=x.dtype).unsqueeze(1)
-        img_ids[:, :, 2] = img_ids[:, :, 2] + torch.linspace(w_offset, w_len - 1 + w_offset, steps=w_len, device=x.device, dtype=x.dtype).unsqueeze(0)
+        img_ids[:, :, 1] = img_ids[:, :, 1] + Tensor.arange(h_offset, h_len + h_offset, dtype=x.dtype).unsqueeze(1)
+        img_ids[:, :, 2] = img_ids[:, :, 2] + Tensor.arange(w_offset, w_len + w_offset, dtype=x.dtype).unsqueeze(0)
         return img, repeat(img_ids, "h w c -> b (h w) c", b=bs)
 
     def forward(self, x, timestep, context, y=None, guidance=None, ref_latents=None, control=None, transformer_options={}, **kwargs):
@@ -250,11 +245,13 @@ class Flux(nn.Module):
                     h = max(h, ref.shape[-2] + h_offset)
                     w = max(w, ref.shape[-1] + w_offset)
 
-                kontext, kontext_ids = self.process_img(ref, index=index, h_offset=h_offset, w_offset=w_offset)
-                img = torch.cat([img, kontext], dim=1)
-                img_ids = torch.cat([img_ids, kontext_ids], dim=1)
+                kontext, kontext_ids = self.process_img(ref, index=1, h_offset=h_offset, w_offset=w_offset)
+                img = Tensor.cat([img, kontext], dim=1)
+                img_ids = Tensor.cat([img_ids, kontext_ids], dim=1)
+                h = max(h, ref.shape[-2] + h_offset)
+                w = max(w, ref.shape[-1] + w_offset)
 
-        txt_ids = torch.zeros((bs, context.shape[1], 3), device=x.device, dtype=x.dtype)
-        out = self.forward_orig(img, img_ids, context, txt_ids, timestep, y, guidance, control, transformer_options, attn_mask=kwargs.get("attention_mask", None))
+        txt_ids = Tensor.zeros((bs, context.shape[1], 3), dtype=x.dtype)
+        out = self.__call__(img, img_ids, context, txt_ids, timestep, y, guidance, control, transformer_options, attn_mask=kwargs.get("attention_mask", None))
         out = out[:, :img_tokens]
         return rearrange(out, "b (h w) (c ph pw) -> b c (h ph) (w pw)", h=h_len, w=w_len, ph=2, pw=2)[:,:,:h_orig,:w_orig]

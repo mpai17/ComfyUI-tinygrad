@@ -17,7 +17,7 @@
 """
 
 
-import torch
+from tinygrad import Tensor
 from enum import Enum
 import math
 import os
@@ -52,13 +52,13 @@ def broadcast_image_to(tensor, target_batch_size, batched_number):
     tensor = tensor[:per_batch]
 
     if per_batch > tensor.shape[0]:
-        tensor = torch.cat([tensor] * (per_batch // tensor.shape[0]) + [tensor[:(per_batch % tensor.shape[0])]], dim=0)
+        tensor = Tensor.cat([tensor] * (per_batch // tensor.shape[0]) + [tensor[:(per_batch % tensor.shape[0])]], dim=0)
 
     current_batch_size = tensor.shape[0]
     if current_batch_size == target_batch_size:
         return tensor
     else:
-        return torch.cat([tensor] * batched_number, dim=0)
+        return Tensor.cat([tensor] * batched_number, dim=0)
 
 class StrengthType(Enum):
     CONSTANT = 1
@@ -96,7 +96,7 @@ class ControlBase:
             self.vae = vae
         self.extra_concat_orig = extra_concat.copy()
         if self.concat_mask and len(self.extra_concat_orig) == 0:
-            self.extra_concat_orig.append(torch.tensor([[[[1.0]]]]))
+            self.extra_concat_orig.append(Tensor([[[[1.0]]]]))
         return self
 
     def pre_run(self, model, percent_to_timestep_function):
@@ -162,7 +162,7 @@ class ControlBase:
                 x = control_output[i]
                 if x is not None:
                     if self.global_average_pooling:
-                        x = torch.mean(x, dim=(2, 3), keepdim=True).repeat(1, 1, x.shape[2], x.shape[3])
+                        x = x.mean(axis=(2, 3), keepdim=True).repeat((1, 1, x.shape[2], x.shape[3]))
 
                     if x not in applied_to: #memory saving strategy, allow shared tensors and only apply strength to shared tensors once
                         applied_to.add(x)
@@ -255,7 +255,7 @@ class ControlNet(ControlBase):
                     c = c.to(self.cond_hint.device)
                     c = comfy.utils.common_upscale(c, self.cond_hint.shape[3], self.cond_hint.shape[2], self.upscale_algorithm, "center")
                     to_concat.append(comfy.utils.repeat_to_batch_size(c, self.cond_hint.shape[0]))
-                self.cond_hint = torch.cat([self.cond_hint] + to_concat, dim=1)
+                self.cond_hint = Tensor.cat([self.cond_hint] + to_concat, dim=1)
 
             self.cond_hint = self.cond_hint.to(device=x_noisy.device, dtype=dtype)
         if x_noisy.shape[0] != self.cond_hint.shape[0]:
@@ -295,7 +295,7 @@ class ControlNet(ControlBase):
         super().cleanup()
 
 class ControlLoraOps:
-    class Linear(torch.nn.Module, comfy.ops.CastWeightBiasOp):
+    class Linear(comfy.ops.CastWeightBiasOp):
         def __init__(self, in_features: int, out_features: int, bias: bool = True,
                     device=None, dtype=None) -> None:
             super().__init__()
@@ -309,11 +309,11 @@ class ControlLoraOps:
         def forward(self, input):
             weight, bias = comfy.ops.cast_bias_weight(self, input)
             if self.up is not None:
-                return torch.nn.functional.linear(input, weight + (torch.mm(self.up.flatten(start_dim=1), self.down.flatten(start_dim=1))).reshape(self.weight.shape).type(input.dtype), bias)
+                return input.linear((weight + (self.up.flatten(1) @ self.down.flatten(1)).reshape(self.weight.shape).cast(input.dtype)).transpose(), bias)
             else:
-                return torch.nn.functional.linear(input, weight, bias)
+                return input.linear(weight.transpose(), bias)
 
-    class Conv2d(torch.nn.Module, comfy.ops.CastWeightBiasOp):
+    class Conv2d(comfy.ops.CastWeightBiasOp):
         def __init__(
             self,
             in_channels,
@@ -349,9 +349,9 @@ class ControlLoraOps:
         def forward(self, input):
             weight, bias = comfy.ops.cast_bias_weight(self, input)
             if self.up is not None:
-                return torch.nn.functional.conv2d(input, weight + (torch.mm(self.up.flatten(start_dim=1), self.down.flatten(start_dim=1))).reshape(self.weight.shape).type(input.dtype), bias, self.stride, self.padding, self.dilation, self.groups)
+                return input.conv2d(weight + (self.up.flatten(1) @ self.down.flatten(1)).reshape(self.weight.shape).cast(input.dtype), bias, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
             else:
-                return torch.nn.functional.conv2d(input, weight, bias, self.stride, self.padding, self.dilation, self.groups)
+                return input.conv2d(weight, bias, stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
 
 class ControlLora(ControlNet):
@@ -731,7 +731,7 @@ def load_controlnet_state_dict(state_dict, model=None, model_options={}):
             else:
                 logging.warning("WARNING: Loaded a diff controlnet without a model. It will very likely not work.")
 
-        class WeightsLoader(torch.nn.Module):
+        class WeightsLoader:
             pass
         w = WeightsLoader()
         w.control_model = control_model
@@ -799,7 +799,7 @@ class T2IAdapter(ControlBase):
             width, height = self.scale_image_to(x_noisy.shape[3] * self.compression_ratio, x_noisy.shape[2] * self.compression_ratio)
             self.cond_hint = comfy.utils.common_upscale(self.cond_hint_original, width, height, self.upscale_algorithm, "center").float().to(self.device)
             if self.channels_in == 1 and self.cond_hint.shape[1] > 1:
-                self.cond_hint = torch.mean(self.cond_hint, 1, keepdim=True)
+                self.cond_hint = self.cond_hint.mean(axis=1, keepdim=True)
         if x_noisy.shape[0] != self.cond_hint.shape[0]:
             self.cond_hint = broadcast_image_to(self.cond_hint, x_noisy.shape[0], batched_number)
         if self.control_input is None:

@@ -1,4 +1,4 @@
-import torch
+from tinygrad import Tensor
 
 class LatentFormat:
     scale_factor = 1.0
@@ -44,8 +44,8 @@ class SDXL(LatentFormat):
 class SDXL_Playground_2_5(LatentFormat):
     def __init__(self):
         self.scale_factor = 0.5
-        self.latents_mean = torch.tensor([-1.6574, 1.886, -1.383, 2.5155]).view(1, 4, 1, 1)
-        self.latents_std = torch.tensor([8.4927, 5.9022, 6.5498, 5.2299]).view(1, 4, 1, 1)
+        self.latents_mean = Tensor([-1.6574, 1.886, -1.383, 2.5155]).view(1, 4, 1, 1)
+        self.latents_std = Tensor([8.4927, 5.9022, 6.5498, 5.2299]).view(1, 4, 1, 1)
 
         self.latent_rgb_factors = [
                     #   R        G        B
@@ -184,11 +184,11 @@ class Mochi(LatentFormat):
 
     def __init__(self):
         self.scale_factor = 1.0
-        self.latents_mean = torch.tensor([-0.06730895953510081, -0.038011381506090416, -0.07477820912866141,
+        self.latents_mean = Tensor([-0.06730895953510081, -0.038011381506090416, -0.07477820912866141,
                                           -0.05565264470995561, 0.012767231469026969, -0.04703542746246419,
                                           0.043896967884726704, -0.09346305707025976, -0.09918314763016893,
                                           -0.008729793427399178, -0.011931556316503654, -0.0321993391887285]).view(1, self.latent_channels, 1, 1, 1)
-        self.latents_std = torch.tensor([0.9263795028493863, 0.9248894543193766, 0.9393059390890617,
+        self.latents_std = Tensor([0.9263795028493863, 0.9248894543193766, 0.9393059390890617,
                                          0.959253732819592, 0.8244560132752793, 0.917259975397747,
                                          0.9294154431013696, 1.3720942357788521, 0.881393668867029,
                                          0.9168315692124348, 0.9185249279345552, 0.9274757570805041]).view(1, self.latent_channels, 1, 1, 1)
@@ -435,11 +435,11 @@ class Wan21(LatentFormat):
 
     def __init__(self):
         self.scale_factor = 1.0
-        self.latents_mean = torch.tensor([
+        self.latents_mean = Tensor([
             -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508,
             0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921
         ]).view(1, self.latent_channels, 1, 1, 1)
-        self.latents_std = torch.tensor([
+        self.latents_std = Tensor([
             2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743,
             3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
         ]).view(1, self.latent_channels, 1, 1, 1)
@@ -516,7 +516,7 @@ class Wan22(Wan21):
 
     def __init__(self):
         self.scale_factor = 1.0
-        self.latents_mean = torch.tensor([
+        self.latents_mean = Tensor([
                 -0.2289, -0.0052, -0.1323, -0.2339, -0.2799, 0.0174, 0.1838, 0.1557,
                 -0.1382, 0.0542, 0.2813, 0.0891, 0.1570, -0.0098, 0.0375, -0.1825,
                 -0.2246, -0.1207, -0.0698, 0.5109, 0.2665, -0.2108, -0.2158, 0.2502,
@@ -524,7 +524,7 @@ class Wan22(Wan21):
                 -0.0313, -0.1649, 0.0117, 0.0723, -0.2839, -0.2083, -0.0520, 0.3748,
                 0.0152, 0.1957, 0.1433, -0.2944, 0.3573, -0.0548, -0.1681, -0.0667,
             ]).view(1, self.latent_channels, 1, 1, 1)
-        self.latents_std = torch.tensor([
+        self.latents_std = Tensor([
                 0.4765, 1.0364, 0.4514, 1.1677, 0.5313, 0.4990, 0.4818, 0.5013,
                 0.8158, 1.0344, 0.5894, 1.0901, 0.6885, 0.6165, 0.8454, 0.4978,
                 0.5759, 0.3523, 0.7135, 0.6804, 0.5833, 1.4146, 0.8986, 0.5659,

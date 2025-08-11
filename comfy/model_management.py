@@ -77,9 +77,37 @@ directml_enabled = False
 total_vram_available_mb = -1
 total_ram_available_mb = -1
 
+def xformers_enabled():
+    """Check if xformers optimization is enabled - not applicable for tinygrad"""
+    return False
+
+def sage_attention_enabled():
+    """Check if sage attention is enabled - not applicable for tinygrad"""  
+    return False
+
+def flash_attention_enabled():
+    """Check if flash attention is enabled - not applicable for tinygrad"""
+    return False
+
+def force_upcast_attention_dtype():
+    """Return forced attention dtype - tinygrad handles this automatically"""
+    return None
+
+def is_nvidia():
+    """Check if NVIDIA GPU is available"""
+    return "CUDA" in str(available_devices).upper()
+
+def is_device_mps(device):
+    """Check if device is MPS (Metal Performance Shaders)"""
+    return "METAL" in str(device).upper()
+
 def is_intel_xpu():
     """Check if Intel XPU is available"""
     return "INTEL" in str(available_devices).upper()
+
+def is_directml_enabled():
+    """Check if DirectML is enabled - not supported in tinygrad"""
+    return False
 
 def get_torch_device():
     """Get the main device for tinygrad"""

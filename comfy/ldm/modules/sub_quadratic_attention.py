@@ -10,9 +10,7 @@
 #   https://arxiv.org/abs/2112.05682v2
 
 from functools import partial
-import torch
-from torch import Tensor
-from torch.utils.checkpoint import checkpoint
+from tinygrad import Tensor
 import math
 import logging
 
@@ -64,34 +62,22 @@ def _summarize_chunk(
     mask,
 ) -> AttnChunk:
     if upcast_attention:
-        with torch.autocast(enabled=False, device_type = 'cuda'):
-            query = query.float()
-            key_t = key_t.float()
-            attn_weights = torch.baddbmm(
-                torch.empty(1, 1, 1, device=query.device, dtype=query.dtype),
-                query,
-                key_t,
-                alpha=scale,
-                beta=0,
-            )
-    else:
-        attn_weights = torch.baddbmm(
-            torch.empty(1, 1, 1, device=query.device, dtype=query.dtype),
-            query,
-            key_t,
-            alpha=scale,
-            beta=0,
-        )
-    max_score, _ = torch.max(attn_weights, -1, keepdim=True)
+        # Upcast to float for higher precision
+        query = query.float()
+        key_t = key_t.float()
+    
+    # Compute attention weights: query @ key_t * scale
+    attn_weights = (query @ key_t) * scale
+    max_score = attn_weights.max(axis=-1, keepdim=True)
     max_score = max_score.detach()
-    attn_weights -= max_score
+    attn_weights = attn_weights - max_score
     if mask is not None:
-        attn_weights += mask
-    torch.exp(attn_weights, out=attn_weights)
-    exp_weights = attn_weights.to(value.dtype)
-    exp_values = torch.bmm(exp_weights, value)
+        attn_weights = attn_weights + mask
+    exp_weights = attn_weights.exp()
+    exp_weights = exp_weights.cast(value.dtype)
+    exp_values = exp_weights @ value
     max_score = max_score.squeeze(-1)
-    return AttnChunk(exp_values, exp_weights.sum(dim=-1), max_score)
+    return AttnChunk(exp_values, exp_weights.sum(axis=-1), max_score)
 
 def _query_chunk_attention(
     query: Tensor,
@@ -121,18 +107,18 @@ def _query_chunk_attention(
         return summarize_chunk(query, key_chunk, value_chunk, mask=mask)
 
     chunks: List[AttnChunk] = [
-        chunk_scanner(chunk, mask) for chunk in torch.arange(0, k_tokens, kv_chunk_size)
+        chunk_scanner(chunk, mask) for chunk in range(0, k_tokens, kv_chunk_size)
     ]
-    acc_chunk = AttnChunk(*map(torch.stack, zip(*chunks)))
+    acc_chunk = AttnChunk(*map(lambda x: Tensor.stack(x), zip(*chunks)))
     chunk_values, chunk_weights, chunk_max = acc_chunk
 
-    global_max, _ = torch.max(chunk_max, 0, keepdim=True)
-    max_diffs = torch.exp(chunk_max - global_max)
-    chunk_values *= torch.unsqueeze(max_diffs, -1)
-    chunk_weights *= max_diffs
+    global_max = chunk_max.max(axis=0, keepdim=True)
+    max_diffs = (chunk_max - global_max).exp()
+    chunk_values = chunk_values * max_diffs.unsqueeze(-1)
+    chunk_weights = chunk_weights * max_diffs
 
-    all_values = chunk_values.sum(dim=0)
-    all_weights = torch.unsqueeze(chunk_weights, -1).sum(dim=0)
+    all_values = chunk_values.sum(axis=0)
+    all_weights = chunk_weights.unsqueeze(-1).sum(axis=0)
     return all_values / all_weights
 
 # TODO: refactor CrossAttention#get_attention_scores to share code with this
@@ -145,39 +131,25 @@ def _get_attention_scores_no_kv_chunking(
     mask,
 ) -> Tensor:
     if upcast_attention:
-        with torch.autocast(enabled=False, device_type = 'cuda'):
-            query = query.float()
-            key_t = key_t.float()
-            attn_scores = torch.baddbmm(
-                torch.empty(1, 1, 1, device=query.device, dtype=query.dtype),
-                query,
-                key_t,
-                alpha=scale,
-                beta=0,
-            )
-    else:
-        attn_scores = torch.baddbmm(
-            torch.empty(1, 1, 1, device=query.device, dtype=query.dtype),
-            query,
-            key_t,
-            alpha=scale,
-            beta=0,
-        )
+        # Upcast to float for higher precision
+        query = query.float()
+        key_t = key_t.float()
+    
+    # Compute attention scores: query @ key_t * scale
+    attn_scores = (query @ key_t) * scale
 
     if mask is not None:
-        attn_scores += mask
+        attn_scores = attn_scores + mask
     try:
-        attn_probs = attn_scores.softmax(dim=-1)
-        del attn_scores
+        attn_probs = attn_scores.softmax(axis=-1)
     except model_management.OOM_EXCEPTION:
         logging.warning("ran out of memory while running softmax in  _get_attention_scores_no_kv_chunking, trying slower in place softmax instead")
-        attn_scores -= attn_scores.max(dim=-1, keepdim=True).values # noqa: F821 attn_scores is not defined
-        torch.exp(attn_scores, out=attn_scores)
-        summed = torch.sum(attn_scores, dim=-1, keepdim=True)
-        attn_scores /= summed
-        attn_probs = attn_scores
+        attn_scores = attn_scores - attn_scores.max(axis=-1, keepdim=True)
+        attn_scores = attn_scores.exp()
+        summed = attn_scores.sum(axis=-1, keepdim=True)
+        attn_probs = attn_scores / summed
 
-    hidden_states_slice = torch.bmm(attn_probs.to(value.dtype), value)
+    hidden_states_slice = attn_probs.cast(value.dtype) @ value
     return hidden_states_slice
 
 class ScannedChunk(NamedTuple):
@@ -239,7 +211,8 @@ def efficient_dot_product_attention(
         return mask[:,chunk_idx:chunk_idx + chunk]
 
     summarize_chunk: SummarizeChunk = partial(_summarize_chunk, scale=scale, upcast_attention=upcast_attention)
-    summarize_chunk: SummarizeChunk = partial(checkpoint, summarize_chunk) if use_checkpoint else summarize_chunk
+    # Checkpoint not implemented in tinygrad, skip for now
+    # summarize_chunk: SummarizeChunk = partial(checkpoint, summarize_chunk) if use_checkpoint else summarize_chunk
     compute_query_chunk_attn: ComputeQueryChunkAttn = partial(
         _get_attention_scores_no_kv_chunking,
         scale=scale,
@@ -262,9 +235,9 @@ def efficient_dot_product_attention(
             mask=mask,
         )
 
-    # TODO: maybe we should use torch.empty_like(query) to allocate storage in-advance,
-    # and pass slices to be mutated, instead of torch.cat()ing the returned slices
-    res = torch.cat([
+    # TODO: maybe we should use Tensor.empty_like(query) to allocate storage in-advance,
+    # and pass slices to be mutated, instead of Tensor.cat()ing the returned slices
+    res = Tensor.cat([
         compute_query_chunk_attn(
             query=get_query_chunk(i * query_chunk_size),
             key_t=key_t,
