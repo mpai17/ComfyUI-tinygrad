@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-import torch
+from tinygrad import Tensor, dtypes
 from enum import Enum
 import logging
 
@@ -162,7 +162,7 @@ class CLIP:
         return pooled_dict
 
     def encode_from_tokens_scheduled(self, tokens, unprojected=False, add_dict: dict[str]={}, show_pbar=True):
-        all_cond_pooled: list[tuple[torch.Tensor, dict[str]]] = []
+        all_cond_pooled: list[tuple[Tensor, dict[str]]] = []
         all_hooks = self.patcher.forced_hooks
         if all_hooks is None or not self.use_clip_schedule:
             # if no hooks or shouldn't use clip schedule, do unscheduled encode_from_tokens and perform add_dict
@@ -280,8 +280,8 @@ class VAE:
         self.latent_dim = 2
         self.output_channels = 3
         self.process_input = lambda image: image * 2.0 - 1.0
-        self.process_output = lambda image: torch.clamp((image + 1.0) / 2.0, min=0.0, max=1.0)
-        self.working_dtypes = [torch.bfloat16, torch.float32]
+        self.process_output = lambda image: ((image + 1.0) / 2.0).clamp(min=0.0, max=1.0)
+        self.working_dtypes = [dtypes.bfloat16, dtypes.float32]
         self.disable_offload = False
 
         self.downscale_index_formula = None
@@ -355,7 +355,7 @@ class VAE:
                 self.latent_dim = 1
                 self.process_output = lambda audio: audio
                 self.process_input = lambda audio: audio
-                self.working_dtypes = [torch.float16, torch.bfloat16, torch.float32]
+                self.working_dtypes = [dtypes.float16, dtypes.bfloat16, dtypes.float32]
                 self.disable_offload = True
             elif "blocks.2.blocks.3.stack.5.weight" in sd or "decoder.blocks.2.blocks.3.stack.5.weight" in sd or "layers.4.layers.1.attn_block.attn.qkv.weight" in sd or "encoder.layers.4.layers.1.attn_block.attn.qkv.weight" in sd: #genmo mochi vae
                 if "blocks.2.blocks.3.stack.5.weight" in sd:
@@ -371,7 +371,7 @@ class VAE:
                 self.upscale_index_formula = (6, 8, 8)
                 self.downscale_ratio = (lambda a: max(0, math.floor((a + 5) / 6)), 8, 8)
                 self.downscale_index_formula = (6, 8, 8)
-                self.working_dtypes = [torch.float16, torch.float32]
+                self.working_dtypes = [dtypes.float16, dtypes.float32]
             elif "decoder.up_blocks.0.res_blocks.0.conv1.conv.weight" in sd: #lightricks ltxv
                 tensor_conv1 = sd["decoder.up_blocks.0.res_blocks.0.conv1.conv.weight"]
                 version = 0
@@ -393,7 +393,7 @@ class VAE:
                 self.upscale_index_formula = (8, 32, 32)
                 self.downscale_ratio = (lambda a: max(0, math.floor((a + 7) / 8)), 32, 32)
                 self.downscale_index_formula = (8, 32, 32)
-                self.working_dtypes = [torch.bfloat16, torch.float32]
+                self.working_dtypes = [dtypes.bfloat16, dtypes.float32]
             elif "decoder.conv_in.conv.weight" in sd:
                 ddconfig = {'double_z': True, 'z_channels': 4, 'resolution': 256, 'in_channels': 3, 'out_ch': 3, 'ch': 128, 'ch_mult': [1, 2, 4, 4], 'num_res_blocks': 2, 'attn_resolutions': [], 'dropout': 0.0}
                 ddconfig["conv3d"] = True
@@ -407,7 +407,7 @@ class VAE:
                 self.first_stage_model = AutoencoderKL(ddconfig=ddconfig, embed_dim=sd['post_quant_conv.weight'].shape[1])
                 self.memory_used_decode = lambda shape, dtype: (1500 * shape[2] * shape[3] * shape[4] * (4 * 8 * 8)) * model_management.dtype_size(dtype)
                 self.memory_used_encode = lambda shape, dtype: (900 * max(shape[2], 2) * shape[3] * shape[4]) * model_management.dtype_size(dtype)
-                self.working_dtypes = [torch.bfloat16, torch.float16, torch.float32]
+                self.working_dtypes = [dtypes.bfloat16, dtypes.float16, dtypes.float32]
             elif "decoder.unpatcher3d.wavelets" in sd:
                 self.upscale_ratio = (lambda a: max(0, a * 8 - 7), 8, 8)
                 self.upscale_index_formula = (8, 8, 8)
@@ -420,7 +420,7 @@ class VAE:
                 #TODO: these values are a bit off because this is not a standard VAE
                 self.memory_used_decode = lambda shape, dtype: (50 * shape[2] * shape[3] * shape[4] * (8 * 8 * 8)) * model_management.dtype_size(dtype)
                 self.memory_used_encode = lambda shape, dtype: (50 * (round((shape[2] + 7) / 8) * 8) * shape[3] * shape[4]) * model_management.dtype_size(dtype)
-                self.working_dtypes = [torch.bfloat16, torch.float32]
+                self.working_dtypes = [dtypes.bfloat16, dtypes.float32]
             elif "decoder.middle.0.residual.0.gamma" in sd:
                 if "decoder.upsamples.0.upsamples.0.residual.2.weight" in sd:  # Wan 2.2 VAE
                     self.upscale_ratio = (lambda a: max(0, a * 4 - 3), 16, 16)
@@ -431,7 +431,7 @@ class VAE:
                     self.latent_channels = 48
                     ddconfig = {"dim": 160, "z_dim": self.latent_channels, "dim_mult": [1, 2, 4, 4], "num_res_blocks": 2, "attn_scales": [], "temperal_downsample": [False, True, True], "dropout": 0.0}
                     self.first_stage_model = comfy.ldm.wan.vae2_2.WanVAE(**ddconfig)
-                    self.working_dtypes = [torch.bfloat16, torch.float16, torch.float32]
+                    self.working_dtypes = [dtypes.bfloat16, dtypes.float16, dtypes.float32]
                     self.memory_used_encode = lambda shape, dtype: 3300 * shape[3] * shape[4] * model_management.dtype_size(dtype)
                     self.memory_used_decode = lambda shape, dtype: 8000 * shape[3] * shape[4] * (16 * 16) * model_management.dtype_size(dtype)
                 else:  # Wan 2.1 VAE
@@ -443,7 +443,7 @@ class VAE:
                     self.latent_channels = 16
                     ddconfig = {"dim": 96, "z_dim": self.latent_channels, "dim_mult": [1, 2, 4, 4], "num_res_blocks": 2, "attn_scales": [], "temperal_downsample": [False, True, True], "dropout": 0.0}
                     self.first_stage_model = comfy.ldm.wan.vae.WanVAE(**ddconfig)
-                    self.working_dtypes = [torch.bfloat16, torch.float16, torch.float32]
+                    self.working_dtypes = [dtypes.bfloat16, dtypes.float16, dtypes.float32]
                     self.memory_used_encode = lambda shape, dtype: 6000 * shape[3] * shape[4] * model_management.dtype_size(dtype)
                     self.memory_used_decode = lambda shape, dtype: 7000 * shape[3] * shape[4] * (8 * 8) * model_management.dtype_size(dtype)
             elif "geo_decoder.cross_attn_decoder.ln_1.bias" in sd:
@@ -456,7 +456,7 @@ class VAE:
                 self.memory_used_decode = lambda shape, dtype: (1024 * 1024 * 1024 * 2.0) * model_management.dtype_size(dtype)  # TODO
                 ddconfig = {"embed_dim": 64, "num_freqs": 8, "include_pi": False, "heads": 16, "width": 1024, "num_decoder_layers": 16, "qkv_bias": False, "qk_norm": True, "geo_decoder_mlp_expand_ratio": mlp_expand, "geo_decoder_downsample_ratio": downsample_ratio, "geo_decoder_ln_post": ln_post}
                 self.first_stage_model = comfy.ldm.hunyuan3d.vae.ShapeVAE(**ddconfig)
-                self.working_dtypes = [torch.float16, torch.bfloat16, torch.float32]
+                self.working_dtypes = [dtypes.float16, dtypes.bfloat16, dtypes.float32]
             elif "vocoder.backbone.channel_layers.0.0.bias" in sd: #Ace Step Audio
                 self.first_stage_model = comfy.ldm.ace.vae.music_dcae_pipeline.MusicDCAE(source_sample_rate=44100)
                 self.memory_used_encode = lambda shape, dtype: (shape[2] * 330) * model_management.dtype_size(dtype)
@@ -468,7 +468,7 @@ class VAE:
                 self.latent_dim = 2
                 self.process_output = lambda audio: audio
                 self.process_input = lambda audio: audio
-                self.working_dtypes = [torch.bfloat16, torch.float16, torch.float32]
+                self.working_dtypes = [dtypes.bfloat16, dtypes.float16, dtypes.float32]
                 self.disable_offload = True
                 self.extra_1d_channel = 16
             else:
@@ -592,7 +592,7 @@ class VAE:
                 samples = samples_in[x:x+batch_number].to(self.vae_dtype).to(self.device)
                 out = self.process_output(self.first_stage_model.decode(samples, **vae_options).to(self.output_device).float())
                 if pixel_samples is None:
-                    pixel_samples = torch.empty((samples_in.shape[0],) + tuple(out.shape[1:]), device=self.output_device)
+                    pixel_samples = Tensor.zeros((samples_in.shape[0],) + tuple(out.shape[1:]), device=self.output_device)
                 pixel_samples[x:x+batch_number] = out
         except model_management.OOM_EXCEPTION:
             logging.warning("Warning: Ran out of memory when regular VAE decoding, retrying with tiled VAE decoding.")
@@ -655,7 +655,7 @@ class VAE:
                 pixels_in = self.process_input(pixel_samples[x:x + batch_number]).to(self.vae_dtype).to(self.device)
                 out = self.first_stage_model.encode(pixels_in).to(self.output_device).float()
                 if samples is None:
-                    samples = torch.empty((pixel_samples.shape[0],) + tuple(out.shape[1:]), device=self.output_device)
+                    samples = Tensor.zeros((pixel_samples.shape[0],) + tuple(out.shape[1:]), device=self.output_device)
                 samples[x:x + batch_number] = out
 
         except model_management.OOM_EXCEPTION:
@@ -1113,7 +1113,7 @@ def load_state_dict_guess_config(sd, output_vae=True, output_clip=True, output_c
 
     if output_model:
         model_patcher = comfy.model_patcher.ModelPatcher(model, load_device=load_device, offload_device=model_management.unet_offload_device())
-        if inital_load_device != torch.device("cpu"):
+        if inital_load_device != str("cpu"):
             logging.info("loaded diffusion model directly to GPU")
             model_management.load_models_gpu([model_patcher], force_full_load=True)
 

@@ -26,7 +26,7 @@ import math
 import uuid
 from typing import Callable, Optional
 
-import torch
+from tinygrad import Tensor, dtypes, nn
 
 import comfy.float
 import comfy.hooks
@@ -128,8 +128,8 @@ class LowVramPatch:
         self.patches = patches
     def __call__(self, weight):
         intermediate_dtype = weight.dtype
-        if intermediate_dtype not in [torch.float32, torch.float16, torch.bfloat16]: #intermediate_dtype has to be one that is supported in math ops
-            intermediate_dtype = torch.float32
+        if intermediate_dtype not in [dtypes.float32, dtypes.float16, dtypes.bfloat16]: #intermediate_dtype has to be one that is supported in math ops
+            intermediate_dtype = dtypes.float32
             return comfy.float.stochastic_rounding(comfy.lora.calculate_weight(self.patches[self.key], weight.to(intermediate_dtype), self.key, intermediate_dtype=intermediate_dtype), weight.dtype, seed=string_to_seed(self.key))
 
         return comfy.lora.calculate_weight(self.patches[self.key], weight, self.key, intermediate_dtype=intermediate_dtype)
@@ -188,7 +188,7 @@ class MemoryCounter:
         self.minimum = minimum
         # TODO: add a safe limit besides 0
 
-    def use(self, weight: torch.Tensor):
+    def use(self, weight: Tensor):
         weight_size = weight.nelement() * weight.element_size()
         if self.is_useable(weight_size):
             self.decrement(weight_size)
@@ -236,8 +236,8 @@ class ModelPatcher:
 
         self.hook_patches: dict[comfy.hooks._HookRef] = {}
         self.hook_patches_backup: dict[comfy.hooks._HookRef] = None
-        self.hook_backup: dict[str, tuple[torch.Tensor, torch.device]] = {}
-        self.cached_hook_patches: dict[comfy.hooks.HookGroup, dict[str, torch.Tensor]] = {}
+        self.hook_backup: dict[str, tuple[Tensor, str]] = {}
+        self.cached_hook_patches: dict[comfy.hooks.HookGroup, dict[str, Tensor]] = {}
         self.current_hooks: Optional[comfy.hooks.HookGroup] = None
         self.forced_hooks: Optional[comfy.hooks.HookGroup] = None  # NOTE: only used for CLIP at this time
         self.is_clip = False
@@ -446,7 +446,7 @@ class ModelPatcher:
         self.weight_wrapper_patches[name] = self.weight_wrapper_patches.get(name, []) + [function]
         self.patches_uuid = uuid.uuid4()
 
-    def get_model_object(self, name: str) -> torch.nn.Module:
+    def get_model_object(self, name: str) -> nn.Module:
         """Retrieves a nested attribute from an object using dot notation considering
         object patches.
 
@@ -585,9 +585,9 @@ class ModelPatcher:
             self.backup[key] = collections.namedtuple('Dimension', ['weight', 'inplace_update'])(weight.to(device=self.offload_device, copy=inplace_update), inplace_update)
 
         if device_to is not None:
-            temp_weight = comfy.model_management.cast_to_device(weight, device_to, torch.float32, copy=True)
+            temp_weight = comfy.model_management.cast_to_device(weight, device_to, dtypes.float32, copy=True)
         else:
-            temp_weight = weight.to(torch.float32, copy=True)
+            temp_weight = weight.cast(dtypes.float32)
         if convert_func is not None:
             temp_weight = convert_func(temp_weight, inplace=True)
 
@@ -878,7 +878,7 @@ class ModelPatcher:
     def current_loaded_device(self):
         return self.model.device
 
-    def calculate_weight(self, patches, weight, key, intermediate_dtype=torch.float32):
+    def calculate_weight(self, patches, weight, key, intermediate_dtype=dtypes.float32):
         logging.warning("The ModelPatcher.calculate_weight function is deprecated, please use: comfy.lora.calculate_weight instead")
         return comfy.lora.calculate_weight(patches, weight, key, intermediate_dtype=intermediate_dtype)
 
@@ -1028,7 +1028,7 @@ class ModelPatcher:
     def set_hook_mode(self, hook_mode: comfy.hooks.EnumHookMode):
         self.hook_mode = hook_mode
 
-    def prepare_hook_patches_current_keyframe(self, t: torch.Tensor, hook_group: comfy.hooks.HookGroup, model_options: dict[str]):
+    def prepare_hook_patches_current_keyframe(self, t: Tensor, hook_group: comfy.hooks.HookGroup, model_options: dict[str]):
         curr_t = t[0]
         reset_current_hooks = False
         transformer_options = model_options.get("transformer_options", {})
@@ -1163,7 +1163,7 @@ class ModelPatcher:
 
     def patch_cached_hook_weights(self, cached_weights: dict, key: str, memory_counter: MemoryCounter):
         if key not in self.hook_backup:
-            weight: torch.Tensor = comfy.utils.get_attr(self.model, key)
+            weight: Tensor = comfy.utils.get_attr(self.model, key)
             target_device = self.offload_device
             if self.hook_mode == comfy.hooks.EnumHookMode.MaxSpeed:
                 used = memory_counter.use(weight)
@@ -1181,7 +1181,7 @@ class ModelPatcher:
             return
 
         weight, set_func, convert_func = get_key_weight(self.model, key)
-        weight: torch.Tensor
+        weight: Tensor
         if key not in self.hook_backup:
             target_device = self.offload_device
             if self.hook_mode == comfy.hooks.EnumHookMode.MaxSpeed:
@@ -1190,7 +1190,7 @@ class ModelPatcher:
                     target_device = weight.device
             self.hook_backup[key] = (weight.to(device=target_device, copy=True), weight.device)
         # TODO: properly handle LowVramPatch, if it ends up an issue
-        temp_weight = comfy.model_management.cast_to_device(weight, weight.device, torch.float32, copy=True)
+        temp_weight = comfy.model_management.cast_to_device(weight, weight.device, dtypes.float32, copy=True)
         if convert_func is not None:
             temp_weight = convert_func(temp_weight, inplace=True)
 
