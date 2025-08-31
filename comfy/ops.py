@@ -52,6 +52,12 @@ except (ModuleNotFoundError, TypeError):
 
 cast_to = comfy.model_management.cast_to #TODO: remove once no more references
 
+def narrow(tensor, dim, start, length):
+    """Extract a slice along a specified dimension (tinygrad implementation of PyTorch's narrow)"""
+    slices = [slice(None)] * len(tensor.shape)
+    slices[dim] = slice(start, start + length)
+    return tensor[tuple(slices)]
+
 def cast_to_input(weight, input, non_blocking=False, copy=True):
     return comfy.model_management.cast_to(weight, input.dtype, input.device, non_blocking=non_blocking, copy=copy)
 
