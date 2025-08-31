@@ -1,30 +1,27 @@
-import torch
-from torch import nn
+from tinygrad import Tensor
 
 
-class LitEma(nn.Module):
+class LitEma:
     def __init__(self, model, decay=0.9999, use_num_upates=True):
-        super().__init__()
         if decay < 0.0 or decay > 1.0:
             raise ValueError('Decay must be between 0 and 1')
 
         self.m_name2s_name = {}
-        self.register_buffer('decay', torch.tensor(decay, dtype=torch.float32))
-        self.register_buffer('num_updates', torch.tensor(0, dtype=torch.int) if use_num_upates
-        else torch.tensor(-1, dtype=torch.int))
+        self.decay = Tensor([decay])
+        self.num_updates = Tensor([0]) if use_num_upates else Tensor([-1])
 
         for name, p in model.named_parameters():
             if p.requires_grad:
                 # remove as '.'-character is not allowed in buffers
                 s_name = name.replace('.', '')
                 self.m_name2s_name.update({name: s_name})
-                self.register_buffer(s_name, p.clone().detach().data)
+                setattr(self, s_name, p.detach())
 
         self.collected_params = []
 
     def reset_num_updates(self):
         del self.num_updates
-        self.register_buffer('num_updates', torch.tensor(0, dtype=torch.int))
+        self.num_updates = Tensor([0])
 
     def forward(self, model):
         decay = self.decay
@@ -35,24 +32,28 @@ class LitEma(nn.Module):
 
         one_minus_decay = 1.0 - decay
 
-        with torch.no_grad():
-            m_param = dict(model.named_parameters())
-            shadow_params = dict(self.named_buffers())
+        # No gradient context needed in tinygrad
+        m_param = dict(model.named_parameters()) if hasattr(model, 'named_parameters') else {}
+        shadow_params = {name: getattr(self, name) for name in self.m_name2s_name.values() if hasattr(self, name)}
 
-            for key in m_param:
-                if m_param[key].requires_grad:
-                    sname = self.m_name2s_name[key]
-                    shadow_params[sname] = shadow_params[sname].type_as(m_param[key])
-                    shadow_params[sname].sub_(one_minus_decay * (shadow_params[sname] - m_param[key]))
-                else:
-                    assert not key in self.m_name2s_name
-
-    def copy_to(self, model):
-        m_param = dict(model.named_parameters())
-        shadow_params = dict(self.named_buffers())
         for key in m_param:
             if m_param[key].requires_grad:
-                m_param[key].data.copy_(shadow_params[self.m_name2s_name[key]].data)
+                sname = self.m_name2s_name[key]
+                if sname in shadow_params:
+                    shadow_params[sname] = shadow_params[sname] - one_minus_decay * (shadow_params[sname] - m_param[key])
+                    setattr(self, sname, shadow_params[sname])
+            else:
+                assert not key in self.m_name2s_name
+
+    def copy_to(self, model):
+        m_param = dict(model.named_parameters()) if hasattr(model, 'named_parameters') else {}
+        shadow_params = {name: getattr(self, name) for name in self.m_name2s_name.values() if hasattr(self, name)}
+        for key in m_param:
+            if m_param[key].requires_grad:
+                if hasattr(m_param[key], 'assign'):
+                    m_param[key].assign(shadow_params[self.m_name2s_name[key]])
+                else:
+                    m_param[key] = shadow_params[self.m_name2s_name[key]]
             else:
                 assert not key in self.m_name2s_name
 
@@ -63,7 +64,7 @@ class LitEma(nn.Module):
           parameters: Iterable of `torch.nn.Parameter`; the parameters to be
             temporarily stored.
         """
-        self.collected_params = [param.clone() for param in parameters]
+        self.collected_params = [param.detach() for param in parameters]
 
     def restore(self, parameters):
         """
@@ -77,4 +78,7 @@ class LitEma(nn.Module):
             updated with the stored parameters.
         """
         for c_param, param in zip(self.collected_params, parameters):
-            param.data.copy_(c_param.data)
+            if hasattr(param, 'assign'):
+                param.assign(c_param)
+            else:
+                param = c_param

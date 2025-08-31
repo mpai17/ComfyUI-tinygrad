@@ -1,4 +1,4 @@
-import torch
+from tinygrad import Tensor
 from comfy.ldm.modules.diffusionmodules.util import make_beta_schedule
 import math
 
@@ -33,7 +33,7 @@ class EPS:
     def noise_scaling(self, sigma, noise, latent_image, max_denoise=False):
         sigma = sigma.view(sigma.shape[:1] + (1,) * (noise.ndim - 1))
         if max_denoise:
-            noise = noise * torch.sqrt(1.0 + sigma ** 2.0)
+            noise = noise * (1.0 + sigma ** 2.0).sqrt()
         else:
             noise = noise * sigma
 
@@ -97,9 +97,8 @@ class COSMOS_RFLOW:
     def inverse_noise_scaling(self, sigma, latent):
         return latent
 
-class ModelSamplingDiscrete(torch.nn.Module):
+class ModelSamplingDiscrete:
     def __init__(self, model_config=None, zsnr=None):
-        super().__init__()
 
         if model_config is not None:
             sampling_settings = model_config.sampling_settings
@@ -124,7 +123,7 @@ class ModelSamplingDiscrete(torch.nn.Module):
         else:
             betas = make_beta_schedule(beta_schedule, timesteps, linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
         alphas = 1. - betas
-        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        alphas_cumprod = Tensor(alphas).cumprod(dim=0)
 
         timesteps, = betas.shape
         self.num_timesteps = int(timesteps)
@@ -143,8 +142,8 @@ class ModelSamplingDiscrete(torch.nn.Module):
         self.set_sigmas(sigmas)
 
     def set_sigmas(self, sigmas):
-        self.register_buffer('sigmas', sigmas.float())
-        self.register_buffer('log_sigmas', sigmas.log().float())
+        self.sigmas = sigmas.float()
+        self.log_sigmas = sigmas.log().float()
 
     @property
     def sigma_min(self):
@@ -160,7 +159,7 @@ class ModelSamplingDiscrete(torch.nn.Module):
         return dists.abs().argmin(dim=0).view(sigma.shape).to(sigma.device)
 
     def sigma(self, timestep):
-        t = torch.clamp(timestep.float().to(self.log_sigmas.device), min=0, max=(len(self.sigmas) - 1))
+        t = timestep.float().clamp(min=0, max=(len(self.sigmas) - 1))
         low_idx = t.floor().long()
         high_idx = t.ceil().long()
         w = t.frac()
@@ -173,7 +172,7 @@ class ModelSamplingDiscrete(torch.nn.Module):
         if percent >= 1.0:
             return 0.0
         percent = 1.0 - percent
-        return self.sigma(torch.tensor(percent * 999.0)).item()
+        return self.sigma(Tensor([percent * 999.0])).item()
 
 class ModelSamplingDiscreteEDM(ModelSamplingDiscrete):
     def timestep(self, sigma):
@@ -182,9 +181,8 @@ class ModelSamplingDiscreteEDM(ModelSamplingDiscrete):
     def sigma(self, timestep):
         return (timestep / 0.25).exp()
 
-class ModelSamplingContinuousEDM(torch.nn.Module):
+class ModelSamplingContinuousEDM:
     def __init__(self, model_config=None):
-        super().__init__()
         if model_config is not None:
             sampling_settings = model_config.sampling_settings
         else:
@@ -197,10 +195,10 @@ class ModelSamplingContinuousEDM(torch.nn.Module):
 
     def set_parameters(self, sigma_min, sigma_max, sigma_data):
         self.sigma_data = sigma_data
-        sigmas = torch.linspace(math.log(sigma_min), math.log(sigma_max), 1000).exp()
+        sigmas = Tensor.linspace(math.log(sigma_min), math.log(sigma_max), 1000).exp()
 
-        self.register_buffer('sigmas', sigmas) #for compatibility with some schedulers
-        self.register_buffer('log_sigmas', sigmas.log())
+        self.sigmas = sigmas #for compatibility with some schedulers
+        self.log_sigmas = sigmas.log()
 
     @property
     def sigma_min(self):
@@ -240,9 +238,8 @@ def time_snr_shift(alpha, t):
         return t
     return alpha * t / (1 + (alpha - 1) * t)
 
-class ModelSamplingDiscreteFlow(torch.nn.Module):
+class ModelSamplingDiscreteFlow:
     def __init__(self, model_config=None):
-        super().__init__()
         if model_config is not None:
             sampling_settings = model_config.sampling_settings
         else:
@@ -253,8 +250,8 @@ class ModelSamplingDiscreteFlow(torch.nn.Module):
     def set_parameters(self, shift=1.0, timesteps=1000, multiplier=1000):
         self.shift = shift
         self.multiplier = multiplier
-        ts = self.sigma((torch.arange(1, timesteps + 1, 1) / timesteps) * multiplier)
-        self.register_buffer('sigmas', ts)
+        ts = self.sigma((Tensor.arange(1, timesteps + 1, 1) / timesteps) * multiplier)
+        self.sigmas = ts
 
     @property
     def sigma_min(self):
@@ -334,9 +331,8 @@ class StableCascadeSampling(ModelSamplingDiscrete):
 def flux_time_shift(mu: float, sigma: float, t):
     return math.exp(mu) / (math.exp(mu) + (1 / t - 1) ** sigma)
 
-class ModelSamplingFlux(torch.nn.Module):
+class ModelSamplingFlux:
     def __init__(self, model_config=None):
-        super().__init__()
         if model_config is not None:
             sampling_settings = model_config.sampling_settings
         else:
@@ -346,8 +342,8 @@ class ModelSamplingFlux(torch.nn.Module):
 
     def set_parameters(self, shift=1.15, timesteps=10000):
         self.shift = shift
-        ts = self.sigma((torch.arange(1, timesteps + 1, 1) / timesteps))
-        self.register_buffer('sigmas', ts)
+        ts = self.sigma((Tensor.arange(1, timesteps + 1, 1) / timesteps))
+        self.sigmas = ts
 
     @property
     def sigma_min(self):

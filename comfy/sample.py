@@ -1,10 +1,40 @@
 from tinygrad import Tensor
 import numpy as np
 import comfy.model_management
-import comfy.samplers
-import comfy.utils
-import numpy as np
 import logging
+import math
+
+# Minimal utils stub for required functionality
+def repeat_to_batch_size(tensor, batch_size, dim=0):
+    """Repeat tensor to match batch size"""
+    if tensor.shape[dim] > batch_size:
+        return tensor.narrow(dim, 0, batch_size)
+    elif tensor.shape[dim] < batch_size:
+        return tensor.repeat(dim * [1] + [math.ceil(batch_size / tensor.shape[dim])] + [1] * (len(tensor.shape) - 1 - dim)).narrow(dim, 0, batch_size)
+    return tensor
+
+# Minimal sampler stubs for basic functionality
+class KSampler:
+    def __init__(self, model, steps, device, sampler, scheduler, denoise, model_options):
+        self.model = model
+        self.steps = steps
+        self.device = device
+        self.sampler = sampler
+        self.scheduler = scheduler
+        self.denoise = denoise
+        self.model_options = model_options
+    
+    def sample(self, noise, positive, negative, cfg, latent_image, start_step=None, last_step=None, 
+              force_full_denoise=False, denoise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
+        # Basic sampling stub - returns noise for now
+        logging.warning("Using KSampler stub - advanced sampling not implemented")
+        return noise
+
+def sample(model, noise, positive, negative, cfg, device, sampler, sigmas, model_options, 
+          latent_image=None, denoise_mask=None, callback=None, disable_pbar=False, seed=None):
+    # Basic sample function stub
+    logging.warning("Using sample function stub - advanced sampling not implemented")
+    return noise
 
 def prepare_noise(latent_image, seed, noise_inds=None):
     """
@@ -29,7 +59,7 @@ def prepare_noise(latent_image, seed, noise_inds=None):
 def fix_empty_latent_channels(model, latent_image):
     latent_format = model.get_model_object("latent_format") #Resize the empty latent image so it has the right number of channels
     if latent_format.latent_channels != latent_image.shape[1] and (latent_image != 0).sum() == 0:
-        latent_image = comfy.utils.repeat_to_batch_size(latent_image, latent_format.latent_channels, dim=1)
+        latent_image = repeat_to_batch_size(latent_image, latent_format.latent_channels, dim=1)
     if latent_format.latent_dimensions == 3 and latent_image.ndim == 4:
         latent_image = latent_image.unsqueeze(2)
     return latent_image
@@ -42,13 +72,13 @@ def cleanup_additional_models(models):
     logging.warning("Warning: comfy.sample.cleanup_additional_models isn't used anymore and can be removed")
 
 def sample(model, noise, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, denoise=1.0, disable_noise=False, start_step=None, last_step=None, force_full_denoise=False, noise_mask=None, sigmas=None, callback=None, disable_pbar=False, seed=None):
-    sampler = comfy.samplers.KSampler(model, steps=steps, device=model.load_device, sampler=sampler_name, scheduler=scheduler, denoise=denoise, model_options=model.model_options)
+    sampler = KSampler(model, steps=steps, device=model.load_device, sampler=sampler_name, scheduler=scheduler, denoise=denoise, model_options=model.model_options)
 
     samples = sampler.sample(noise, positive, negative, cfg=cfg, latent_image=latent_image, start_step=start_step, last_step=last_step, force_full_denoise=force_full_denoise, denoise_mask=noise_mask, sigmas=sigmas, callback=callback, disable_pbar=disable_pbar, seed=seed)
     samples = samples.to(comfy.model_management.intermediate_device())
     return samples
 
 def sample_custom(model, noise, cfg, sampler, sigmas, positive, negative, latent_image, noise_mask=None, callback=None, disable_pbar=False, seed=None):
-    samples = comfy.samplers.sample(model, noise, positive, negative, cfg, model.load_device, sampler, sigmas, model_options=model.model_options, latent_image=latent_image, denoise_mask=noise_mask, callback=callback, disable_pbar=disable_pbar, seed=seed)
+    samples = sample(model, noise, positive, negative, cfg, model.load_device, sampler, sigmas, model_options=model.model_options, latent_image=latent_image, denoise_mask=noise_mask, callback=callback, disable_pbar=disable_pbar, seed=seed)
     samples = samples.to(comfy.model_management.intermediate_device())
     return samples

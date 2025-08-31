@@ -1,7 +1,16 @@
 from tinygrad import Tensor
 import math
-import comfy.utils
+from comfy.ops import narrow
 import logging
+
+# Minimal utils stub for required functionality
+def repeat_to_batch_size(tensor, batch_size, dim=0):
+    """Repeat tensor to match batch size"""
+    if tensor.shape[dim] > batch_size:
+        return narrow(tensor, dim, 0, batch_size)
+    elif tensor.shape[dim] < batch_size:
+        return narrow(tensor.repeat(dim * [1] + [math.ceil(batch_size / tensor.shape[dim])] + [1] * (len(tensor.shape) - 1 - dim)), dim, 0, batch_size)
+    return tensor
 
 
 class CONDRegular:
@@ -12,7 +21,7 @@ class CONDRegular:
         return self.__class__(cond)
 
     def process_cond(self, batch_size, **kwargs):
-        return self._copy_with(comfy.utils.repeat_to_batch_size(self.cond, batch_size))
+        return self._copy_with(repeat_to_batch_size(self.cond, batch_size))
 
     def can_concat(self, other):
         if self.cond.shape != other.cond.shape:
@@ -38,9 +47,9 @@ class CONDNoiseShape(CONDRegular):
         if area is not None:
             dims = len(area) // 2
             for i in range(dims):
-                data = data.narrow(i + 2, area[i + dims], area[i])
+                data = narrow(data, i + 2, area[i + dims], area[i])
 
-        return self._copy_with(comfy.utils.repeat_to_batch_size(data, batch_size))
+        return self._copy_with(repeat_to_batch_size(data, batch_size))
 
 
 class CONDCrossAttn(CONDRegular):
@@ -102,7 +111,7 @@ class CONDList(CONDRegular):
     def process_cond(self, batch_size, **kwargs):
         out = []
         for c in self.cond:
-            out.append(comfy.utils.repeat_to_batch_size(c, batch_size))
+            out.append(repeat_to_batch_size(c, batch_size))
 
         return self._copy_with(out)
 

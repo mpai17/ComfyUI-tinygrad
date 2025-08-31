@@ -1,5 +1,18 @@
 from tinygrad import Tensor
-import comfy.utils
+
+# Minimal utils stub for required functionality
+def state_dict_prefix_replace(state_dict, replace_prefix, filter_keys=False):
+    """Replace prefixes in state dict keys"""
+    if filter_keys:
+        out = {}
+    else:
+        out = state_dict
+    for rp in replace_prefix:
+        replace = list(map(lambda a: (a, "{}{}".format(replace_prefix[rp], a[len(rp):])), filter(lambda a: a.startswith(rp), state_dict.keys())))
+        for x in replace:
+            w = state_dict.pop(x[0])
+            out[x[1]] = w
+    return out
 
 
 def convert_lora_bfl_control(sd): #BFL loras for Flux
@@ -13,7 +26,7 @@ def convert_lora_bfl_control(sd): #BFL loras for Flux
 
 
 def convert_lora_wan_fun(sd): #Wan Fun loras
-    return comfy.utils.state_dict_prefix_replace(sd, {"lora_unet__": "lora_unet_"})
+    return state_dict_prefix_replace(sd, {"lora_unet__": "lora_unet_"})
 
 
 def convert_lora(sd):
