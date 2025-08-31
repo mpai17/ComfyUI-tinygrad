@@ -10,14 +10,13 @@
 
 import math
 import logging
-import torch
-import torch.nn as nn
+from tinygrad import Tensor, dtypes
 import numpy as np
 from einops import repeat, rearrange
 
 from comfy.ldm.util import instantiate_from_config
 
-class AlphaBlender(nn.Module):
+class AlphaBlender:
     strategies = ["learned", "fixed", "learned_with_images"]
 
     def __init__(
@@ -26,7 +25,6 @@ class AlphaBlender(nn.Module):
         merge_strategy: str = "learned_with_images",
         rearrange_pattern: str = "b t -> (b t) 1 1",
     ):
-        super().__init__()
         self.merge_strategy = merge_strategy
         self.rearrange_pattern = rearrange_pattern
 
@@ -35,35 +33,32 @@ class AlphaBlender(nn.Module):
         ), f"merge_strategy needs to be in {self.strategies}"
 
         if self.merge_strategy == "fixed":
-            self.register_buffer("mix_factor", torch.Tensor([alpha]))
+            self.mix_factor = Tensor([alpha])
         elif (
             self.merge_strategy == "learned"
             or self.merge_strategy == "learned_with_images"
         ):
-            self.register_parameter(
-                "mix_factor", torch.nn.Parameter(torch.Tensor([alpha]))
-            )
+            self.mix_factor = Tensor([alpha])  # Parameter equivalent
         else:
             raise ValueError(f"unknown merge strategy {self.merge_strategy}")
 
-    def get_alpha(self, image_only_indicator: torch.Tensor, device) -> torch.Tensor:
+    def get_alpha(self, image_only_indicator: Tensor, device) -> Tensor:
         # skip_time_mix = rearrange(repeat(skip_time_mix, 'b -> (b t) () () ()', t=t), '(b t) 1 ... -> b 1 t ...', t=t)
         if self.merge_strategy == "fixed":
             # make shape compatible
             # alpha = repeat(self.mix_factor, '1 -> b () t  () ()', t=t, b=bs)
             alpha = self.mix_factor.to(device)
         elif self.merge_strategy == "learned":
-            alpha = torch.sigmoid(self.mix_factor.to(device))
+            alpha = self.mix_factor.sigmoid()
             # make shape compatible
             # alpha = repeat(alpha, '1 -> s () ()', s = t * bs)
         elif self.merge_strategy == "learned_with_images":
             if image_only_indicator is None:
-                alpha = rearrange(torch.sigmoid(self.mix_factor.to(device)), "... -> ... 1")
+                alpha = rearrange(self.mix_factor.sigmoid(), "... -> ... 1")
             else:
-                alpha = torch.where(
-                    image_only_indicator.bool(),
-                    torch.ones(1, 1, device=image_only_indicator.device),
-                    rearrange(torch.sigmoid(self.mix_factor.to(image_only_indicator.device)), "... -> ... 1"),
+                alpha = image_only_indicator.cast(dtypes.bool).where(
+                    Tensor.ones(1, 1),
+                    rearrange(self.mix_factor.sigmoid(), "... -> ... 1")
                 )
             alpha = rearrange(alpha, self.rearrange_pattern)
             # make shape compatible
@@ -77,7 +72,7 @@ class AlphaBlender(nn.Module):
         x_spatial,
         x_temporal,
         image_only_indicator=None,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         alpha = self.get_alpha(image_only_indicator, x_spatial.device)
         x = (
             alpha.to(x_spatial.dtype) * x_spatial
@@ -89,18 +84,18 @@ class AlphaBlender(nn.Module):
 def make_beta_schedule(schedule, n_timestep, linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
     if schedule == "linear":
         betas = (
-                torch.linspace(linear_start ** 0.5, linear_end ** 0.5, n_timestep, dtype=torch.float64) ** 2
+                Tensor.linspace(linear_start ** 0.5, linear_end ** 0.5, n_timestep, dtype=dtypes.float64) ** 2
         )
 
     elif schedule == "cosine":
         timesteps = (
-                torch.arange(n_timestep + 1, dtype=torch.float64) / n_timestep + cosine_s
+                Tensor.arange(n_timestep + 1, dtype=dtypes.float64) / n_timestep + cosine_s
         )
         alphas = timesteps / (1 + cosine_s) * np.pi / 2
-        alphas = torch.cos(alphas).pow(2)
+        alphas = alphas.cos().pow(2)
         alphas = alphas / alphas[0]
         betas = 1 - alphas[1:] / alphas[:-1]
-        betas = torch.clamp(betas, min=0, max=0.999)
+        betas = betas.clip(0, 0.999)
 
     elif schedule == "squaredcos_cap_v2":  # used for karlo prior
         # return early
@@ -110,9 +105,9 @@ def make_beta_schedule(schedule, n_timestep, linear_start=1e-4, linear_end=2e-2,
         )
 
     elif schedule == "sqrt_linear":
-        betas = torch.linspace(linear_start, linear_end, n_timestep, dtype=torch.float64)
+        betas = Tensor.linspace(linear_start, linear_end, n_timestep, dtype=dtypes.float64)
     elif schedule == "sqrt":
-        betas = torch.linspace(linear_start, linear_end, n_timestep, dtype=torch.float64) ** 0.5
+        betas = Tensor.linspace(linear_start, linear_end, n_timestep, dtype=dtypes.float64) ** 0.5
     else:
         raise ValueError(f"schedule '{schedule}' unknown.")
     return betas
@@ -191,39 +186,22 @@ def checkpoint(func, inputs, params, flag):
         return func(*inputs)
 
 
-class CheckpointFunction(torch.autograd.Function):
+class CheckpointFunction:
+    # Simplified checkpoint - autograd functions not directly supported in tinygrad
     @staticmethod
     def forward(ctx, run_function, length, *args):
         ctx.run_function = run_function
         ctx.input_tensors = list(args[:length])
         ctx.input_params = list(args[length:])
-        ctx.gpu_autocast_kwargs = {"enabled": torch.is_autocast_enabled(),
-                                   "dtype": torch.get_autocast_gpu_dtype(),
-                                   "cache_enabled": torch.is_autocast_cache_enabled()}
-        with torch.no_grad():
-            output_tensors = ctx.run_function(*ctx.input_tensors)
+        # Autocast not applicable in tinygrad
+        # No grad context not needed in tinygrad
+        output_tensors = ctx.run_function(*ctx.input_tensors)
         return output_tensors
 
-    @staticmethod
+    @staticmethod  
     def backward(ctx, *output_grads):
-        ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
-        with torch.enable_grad(), \
-                torch.cuda.amp.autocast(**ctx.gpu_autocast_kwargs):
-            # Fixes a bug where the first op in run_function modifies the
-            # Tensor storage in place, which is not allowed for detach()'d
-            # Tensors.
-            shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
-            output_tensors = ctx.run_function(*shallow_copies)
-        input_grads = torch.autograd.grad(
-            output_tensors,
-            ctx.input_tensors + ctx.input_params,
-            output_grads,
-            allow_unused=True,
-        )
-        del ctx.input_tensors
-        del ctx.input_params
-        del output_tensors
-        return (None, None) + input_grads
+        # Autograd not implemented for tinygrad
+        raise NotImplementedError("Autograd gradient computation not supported")
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
@@ -237,13 +215,11 @@ def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
     """
     if not repeat_only:
         half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32, device=timesteps.device) / half
-        )
+        freqs = (-math.log(max_period) * Tensor.arange(start=0, end=half, dtype=dtypes.float32) / half).exp()
         args = timesteps[:, None].float() * freqs[None]
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+        embedding = Tensor.cat([args.cos(), args.sin()], dim=-1)
         if dim % 2:
-            embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+            embedding = Tensor.cat([embedding, Tensor.zeros_like(embedding[:, :1])], dim=-1)
     else:
         embedding = repeat(timesteps, 'b -> b d', d=dim)
     return embedding
@@ -278,29 +254,29 @@ def avg_pool_nd(dims, *args, **kwargs):
     """
     Create a 1D, 2D, or 3D average pooling module.
     """
+    # Placeholder for average pooling - would need tinygrad implementation
     if dims == 1:
-        return nn.AvgPool1d(*args, **kwargs)
+        raise NotImplementedError("AvgPool1d not yet implemented in tinygrad conversion")
     elif dims == 2:
-        return nn.AvgPool2d(*args, **kwargs)
+        raise NotImplementedError("AvgPool2d not yet implemented in tinygrad conversion") 
     elif dims == 3:
-        return nn.AvgPool3d(*args, **kwargs)
+        raise NotImplementedError("AvgPool3d not yet implemented in tinygrad conversion")
     raise ValueError(f"unsupported dimensions: {dims}")
 
 
-class HybridConditioner(nn.Module):
+class HybridConditioner:
 
     def __init__(self, c_concat_config, c_crossattn_config):
-        super().__init__()
         self.concat_conditioner = instantiate_from_config(c_concat_config)
         self.crossattn_conditioner = instantiate_from_config(c_crossattn_config)
 
-    def forward(self, c_concat, c_crossattn):
+    def __call__(self, c_concat, c_crossattn):
         c_concat = self.concat_conditioner(c_concat)
         c_crossattn = self.crossattn_conditioner(c_crossattn)
         return {'c_concat': [c_concat], 'c_crossattn': [c_crossattn]}
 
 
 def noise_like(shape, device, repeat=False):
-    repeat_noise = lambda: torch.randn((1, *shape[1:]), device=device).repeat(shape[0], *((1,) * (len(shape) - 1)))
-    noise = lambda: torch.randn(shape, device=device)
+    repeat_noise = lambda: Tensor.randn(1, *shape[1:]).repeat((shape[0], *((1,) * (len(shape) - 1))))
+    noise = lambda: Tensor.randn(*shape)
     return repeat_noise() if repeat else noise()

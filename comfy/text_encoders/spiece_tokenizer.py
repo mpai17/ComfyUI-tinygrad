@@ -1,4 +1,4 @@
-import torch
+from tinygrad import Tensor
 import os
 
 class SPieceTokenizer:
@@ -10,7 +10,7 @@ class SPieceTokenizer:
         self.add_bos = add_bos
         self.add_eos = add_eos
         import sentencepiece
-        if torch.is_tensor(tokenizer_path):
+        if hasattr(tokenizer_path, 'numpy'):
             tokenizer_path = tokenizer_path.numpy().tobytes()
 
         if isinstance(tokenizer_path, bytes):
@@ -31,4 +31,5 @@ class SPieceTokenizer:
         return {"input_ids": out}
 
     def serialize_model(self):
-        return torch.ByteTensor(list(self.tokenizer.serialized_model_proto()))
+        import numpy as np
+        return Tensor(np.array(list(self.tokenizer.serialized_model_proto()), dtype=np.uint8))

@@ -20,9 +20,8 @@ adapter_maps: dict[str, type[WeightAdapterBase]] = {
     "LoHa": LoHaAdapter,
     "LoKr": LoKrAdapter,
     "OFT": OFTAdapter,
-    ## We disable not implemented algo for now
-    # "GLoRA": GLoRAAdapter,
-    # "BOFT": BOFTAdapter,
+    "GLoRA": GLoRAAdapter,
+    "BOFT": BOFTAdapter,
 }
 
 

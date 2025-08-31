@@ -16,7 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-import torch
+from tinygrad import dtypes
 from . import model_base
 from . import utils
 from . import latent_formats
@@ -43,7 +43,7 @@ class BASE:
     latent_format = latent_formats.LatentFormat
     vae_key_prefix = ["first_stage_model."]
     text_encoder_key_prefix = ["cond_stage_model."]
-    supported_inference_dtypes = [torch.float16, torch.bfloat16, torch.float32]
+    supported_inference_dtypes = [dtypes.float16, dtypes.bfloat16, dtypes.float32]
 
     memory_usage_factor = 2.0
 
