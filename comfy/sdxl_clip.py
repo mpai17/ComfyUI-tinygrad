@@ -1,5 +1,5 @@
 from comfy import sd1_clip
-from tinygrad import Tensor
+import torch
 import os
 
 class SDXLClipG(sd1_clip.SDClipModel):
@@ -38,8 +38,9 @@ class SDXLTokenizer:
     def state_dict(self):
         return {}
 
-class SDXLClipModel:
+class SDXLClipModel(torch.nn.Module):
     def __init__(self, device="cpu", dtype=None, model_options={}):
+        super().__init__()
         self.clip_l = sd1_clip.SDClipModel(layer="hidden", layer_idx=-2, device=device, dtype=dtype, layer_norm_hidden_state=False, model_options=model_options)
         self.clip_g = SDXLClipG(device=device, dtype=dtype, model_options=model_options)
         self.dtypes = set([dtype])
@@ -58,7 +59,7 @@ class SDXLClipModel:
         g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
         l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
         cut_to = min(l_out.shape[1], g_out.shape[1])
-        return Tensor.cat(l_out[:,:cut_to], g_out[:,:cut_to], dim=-1), g_pooled
+        return torch.cat([l_out[:,:cut_to], g_out[:,:cut_to]], dim=-1), g_pooled
 
     def load_sd(self, sd):
         if "text_model.encoder.layers.30.mlp.fc1.weight" in sd:

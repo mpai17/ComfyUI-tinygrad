@@ -17,18 +17,17 @@
 """
 
 
-# import torch  # Removed for tinygrad conversion
+import torch
 import math
 import struct
 import comfy.checkpoint_pickle
-# import safetensors.torch  # Removed for tinygrad conversion
+import safetensors.torch
 import numpy as np
 from PIL import Image
 import logging
 import itertools
-# from torch.nn.functional import interpolate  # Removed for tinygrad conversion
+from torch.nn.functional import interpolate
 from einops import rearrange
-from tinygrad import Tensor, dtypes
 from comfy.cli_args import args
 
 MMAP_TORCH_FILES = args.mmap_torch_files

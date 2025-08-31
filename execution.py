@@ -10,7 +10,7 @@ from enum import Enum
 from typing import List, Literal, NamedTuple, Optional, Union
 import asyncio
 
-# import torch  # Removed torch import for tinygrad
+import torch
 
 import comfy.model_management
 import nodes
@@ -659,14 +659,14 @@ class PromptExecutor:
         self.status_messages = []
         self.add_message("execution_start", { "prompt_id": prompt_id}, broadcast=False)
 
-        # with torch.inference_mode():  # Removed for tinygrad - not needed
-        dynamic_prompt = DynamicPrompt(prompt)
-        reset_progress_state(prompt_id, dynamic_prompt)
-        add_progress_handler(WebUIProgressHandler(self.server))
-        is_changed_cache = IsChangedCache(prompt_id, dynamic_prompt, self.caches.outputs)
-        for cache in self.caches.all:
-            await cache.set_prompt(dynamic_prompt, prompt.keys(), is_changed_cache)
-            cache.clean_unused()
+        with torch.inference_mode():
+            dynamic_prompt = DynamicPrompt(prompt)
+            reset_progress_state(prompt_id, dynamic_prompt)
+            add_progress_handler(WebUIProgressHandler(self.server))
+            is_changed_cache = IsChangedCache(prompt_id, dynamic_prompt, self.caches.outputs)
+            for cache in self.caches.all:
+                await cache.set_prompt(dynamic_prompt, prompt.keys(), is_changed_cache)
+                cache.clean_unused()
 
             cached_nodes = []
             for node_id in prompt:

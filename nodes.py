@@ -1,6 +1,5 @@
 from __future__ import annotations
-from tinygrad import Tensor, dtypes
-import tinygrad.nn as nn
+import torch
 
 
 import os
@@ -18,15 +17,7 @@ from PIL import Image, ImageOps, ImageSequence
 from PIL.PngImagePlugin import PngInfo
 
 import numpy as np
-# import safetensors.torch  # Commented out for tinygrad conversion
-
-# Stub for safetensors functionality
-class safetensors:
-    class torch:
-        @staticmethod
-        def load_file(path, device="cpu"):
-            # For now, return a dummy dict - this needs proper implementation
-            return {"latent_tensor": Tensor.zeros((1, 4, 64, 64)), "latent_format_version_0": Tensor.zeros((1,))}
+import safetensors.torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "comfy"))
 

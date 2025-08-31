@@ -3,7 +3,7 @@
 # import functools
 import math
 
-from tinygrad import Tensor, dtypes
+from tinygrad import Tensor
 
 
 def centers(start: float, stop, num, dtype=None, device=None):
@@ -19,7 +19,7 @@ def centers(start: float, stop, num, dtype=None, device=None):
     Returns:
         centers (Tensor): Centers of the bins. Shape: (num,).
     """
-    edges = Tensor.linspace(start, stop, num + 1, dtype=dtype or dtypes.float32)
+    edges = Tensor.linspace(start, stop, num + 1, dtype=dtype)
     return (edges[:-1] + edges[1:]) / 2
 
 
@@ -85,10 +85,7 @@ def compute_mixed_rotation(
         freqs_sin: [N, num_heads, num_freqs] - sine components
     """
     assert freqs.ndim == 3
-    # Fix broadcasting: pos [N, 3] -> [N, 3, 1, 1] to match freqs [1, 3, num_heads, num_freqs]
-    pos_expanded = pos.cast(freqs.dtype).unsqueeze(-1).unsqueeze(-1)
-    freqs_expanded = freqs.unsqueeze(0)
-    freqs_sum = pos_expanded * freqs_expanded
+    freqs_sum = pos.cast(freqs.dtype).unsqueeze(-1) * freqs.unsqueeze(0)
     freqs_cos = freqs_sum.cos()
     freqs_sin = freqs_sum.sin()
     return freqs_cos, freqs_sin
