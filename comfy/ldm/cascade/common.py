@@ -30,6 +30,9 @@ class OptimizedAttention:
 
         self.out_proj = operations.Linear(c, c, bias=True, dtype=dtype, device=device)
 
+    def __call__(self, q, k, v):
+        return self.forward(q, k, v)
+
     def forward(self, q, k, v):
         q = self.to_q(q)
         k = self.to_k(k)
@@ -43,6 +46,9 @@ class Attention2D:
     def __init__(self, c, nhead, dropout=0.0, dtype=None, device=None, operations=None):
         self.attn = OptimizedAttention(c, nhead, dtype=dtype, device=device, operations=operations)
         # self.attn = nn.MultiheadAttention(c, nhead, dropout=dropout, bias=True, batch_first=True, dtype=dtype, device=device)
+
+    def __call__(self, x, kv, self_attn=False):
+        return self.forward(x, kv, self_attn)
 
     def forward(self, x, kv, self_attn=False):
         orig_shape = x.shape
@@ -70,9 +76,12 @@ class GlobalResponseNorm:
         self.gamma = Tensor.empty(1, 1, 1, dim, dtype=dtype)
         self.beta = Tensor.empty(1, 1, 1, dim, dtype=dtype)
 
+    def __call__(self, x):
+        return self.forward(x)
+
     def forward(self, x):
         Gx = (x ** 2).sum(axis=(1, 2), keepdim=True).sqrt()
-        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
+        Nx = Gx / (Gx.mean(axis=-1, keepdim=True) + 1e-6)
         return comfy.ops.cast_to_input(self.gamma, x) * (x * Nx) + comfy.ops.cast_to_input(self.beta, x) + x
 
 

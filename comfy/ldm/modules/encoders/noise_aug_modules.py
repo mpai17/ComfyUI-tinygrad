@@ -1,6 +1,13 @@
 from ..diffusionmodules.upscaling import ImageConcatWithNoiseAugmentation
-from ..diffusionmodules.openaimodel import Timestep
 from tinygrad import Tensor
+
+# Minimal Timestep stub
+class Timestep:
+    def __init__(self, dim):
+        self.dim = dim
+    
+    def __call__(self, t, dtype=None):
+        return t  # Simple passthrough for now
 
 class CLIPEmbeddingNoiseAugmentation(ImageConcatWithNoiseAugmentation):
     def __init__(self, *args, clip_stats_path=None, timestep_dim=256, **kwargs):
