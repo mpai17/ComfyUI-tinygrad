@@ -1,49 +1,47 @@
 import logging
 from typing import Optional
 
-import torch
+from tinygrad import Tensor, dtypes
 import comfy.model_management
 from .base import (
     WeightAdapterBase,
-    WeightAdapterTrainBase,
     weight_decompose,
     factorization,
 )
 
 
-class LokrDiff(WeightAdapterTrainBase):
+class LokrDiff:
     def __init__(self, weights):
-        super().__init__()
         (lokr_w1, lokr_w2, alpha, lokr_w1_a, lokr_w1_b, lokr_w2_a, lokr_w2_b, lokr_t2, dora_scale) = weights
         self.use_tucker = False
         if lokr_w1_a is not None:
             _, rank_a = lokr_w1_a.shape[0], lokr_w1_a.shape[1]
             rank_a, _ = lokr_w1_b.shape[0], lokr_w1_b.shape[1]
-            self.lokr_w1_a = torch.nn.Parameter(lokr_w1_a)
-            self.lokr_w1_b = torch.nn.Parameter(lokr_w1_b)
+            self.lokr_w1_a = lokr_w1_a
+            self.lokr_w1_b = lokr_w1_b
             self.w1_rebuild = True
             self.ranka = rank_a
 
         if lokr_w2_a is not None:
             _, rank_b = lokr_w2_a.shape[0], lokr_w2_a.shape[1]
             rank_b, _ = lokr_w2_b.shape[0], lokr_w2_b.shape[1]
-            self.lokr_w2_a = torch.nn.Parameter(lokr_w2_a)
-            self.lokr_w2_b = torch.nn.Parameter(lokr_w2_b)
+            self.lokr_w2_a = lokr_w2_a
+            self.lokr_w2_b = lokr_w2_b
             if lokr_t2 is not None:
                 self.use_tucker = True
-                self.lokr_t2 = torch.nn.Parameter(lokr_t2)
+                self.lokr_t2 = lokr_t2
             self.w2_rebuild = True
             self.rankb = rank_b
 
         if lokr_w1 is not None:
-            self.lokr_w1 = torch.nn.Parameter(lokr_w1)
+            self.lokr_w1 = lokr_w1
             self.w1_rebuild = False
 
         if lokr_w2 is not None:
-            self.lokr_w2 = torch.nn.Parameter(lokr_w2)
+            self.lokr_w2 = lokr_w2
             self.w2_rebuild = False
 
-        self.alpha = torch.nn.Parameter(torch.tensor(alpha), requires_grad=False)
+        self.alpha = alpha if isinstance(alpha, (int, float)) else alpha.item()
 
     @property
     def w1(self):
@@ -56,7 +54,7 @@ class LokrDiff(WeightAdapterTrainBase):
     def w2(self):
         if self.w2_rebuild:
             if self.use_tucker:
-                w2 = torch.einsum(
+                w2 = Tensor.einsum(
                     'i j k l, j r, i p -> p r k l',
                     self.lokr_t2,
                     self.lokr_w2_b,
@@ -69,11 +67,18 @@ class LokrDiff(WeightAdapterTrainBase):
             return self.lokr_w2
 
     def __call__(self, w):
-        diff = torch.kron(self.w1, self.w2)
-        return w + diff.reshape(w.shape).to(w)
+        diff = Tensor.kron(self.w1, self.w2)
+        return w + diff.reshape(w.shape)
 
     def passive_memory_usage(self):
-        return sum(param.numel() * param.element_size() for param in self.parameters())
+        """Calculate memory usage of stored tensors"""
+        total_size = 0
+        for attr_name in ['lokr_w1', 'lokr_w2', 'lokr_w1_a', 'lokr_w1_b', 'lokr_w2_a', 'lokr_w2_b', 'lokr_t2']:
+            if hasattr(self, attr_name):
+                tensor = getattr(self, attr_name)
+                if tensor is not None:
+                    total_size += tensor.numel() * tensor.dtype.itemsize
+        return total_size
 
 
 class LoKrAdapter(WeightAdapterBase):
@@ -86,13 +91,11 @@ class LoKrAdapter(WeightAdapterBase):
     @classmethod
     def create_train(cls, weight, rank=1, alpha=1.0):
         out_dim = weight.shape[0]
-        in_dim = weight.shape[1:].numel()
+        in_dim = int(Tensor(weight.shape[1:]).prod().item())
         out1, out2 = factorization(out_dim, rank)
         in1, in2 = factorization(in_dim, rank)
-        mat1 = torch.empty(out1, in1, device=weight.device, dtype=weight.dtype)
-        mat2 = torch.empty(out2, in2, device=weight.device, dtype=weight.dtype)
-        torch.nn.init.kaiming_uniform_(mat2, a=5**0.5)
-        torch.nn.init.constant_(mat1, 0.0)
+        mat1 = Tensor.zeros(out1, in1)
+        mat2 = Tensor.uniform(out2, in2) * (5**0.5) # Kaiming uniform approximation
         return LokrDiff(
             (mat1, mat2, alpha, None, None, None, None, None, None)
         )
@@ -104,9 +107,9 @@ class LoKrAdapter(WeightAdapterBase):
     def load(
         cls,
         x: str,
-        lora: dict[str, torch.Tensor],
+        lora: dict[str, Tensor],
         alpha: float,
-        dora_scale: torch.Tensor,
+        dora_scale: Tensor,
         loaded_keys: set[str] = None,
     ) -> Optional["LoKrAdapter"]:
         if loaded_keys is None:
@@ -168,7 +171,7 @@ class LoKrAdapter(WeightAdapterBase):
         strength_model,
         offset,
         function,
-        intermediate_dtype=torch.float32,
+        intermediate_dtype=dtypes.float32,
         original_weight=None,
     ):
         v = self.weights
@@ -184,18 +187,18 @@ class LoKrAdapter(WeightAdapterBase):
 
         if w1 is None:
             dim = w1_b.shape[0]
-            w1 = torch.mm(comfy.model_management.cast_to_device(w1_a, weight.device, intermediate_dtype),
-                            comfy.model_management.cast_to_device(w1_b, weight.device, intermediate_dtype))
+            w1 = comfy.model_management.cast_to_device(w1_a, weight.device, intermediate_dtype) @ \
+                 comfy.model_management.cast_to_device(w1_b, weight.device, intermediate_dtype)
         else:
             w1 = comfy.model_management.cast_to_device(w1, weight.device, intermediate_dtype)
 
         if w2 is None:
             dim = w2_b.shape[0]
             if t2 is None:
-                w2 = torch.mm(comfy.model_management.cast_to_device(w2_a, weight.device, intermediate_dtype),
-                                comfy.model_management.cast_to_device(w2_b, weight.device, intermediate_dtype))
+                w2 = comfy.model_management.cast_to_device(w2_a, weight.device, intermediate_dtype) @ \
+                     comfy.model_management.cast_to_device(w2_b, weight.device, intermediate_dtype)
             else:
-                w2 = torch.einsum('i j k l, j r, i p -> p r k l',
+                w2 = Tensor.einsum('i j k l, j r, i p -> p r k l',
                                     comfy.model_management.cast_to_device(t2, weight.device, intermediate_dtype),
                                     comfy.model_management.cast_to_device(w2_b, weight.device, intermediate_dtype),
                                     comfy.model_management.cast_to_device(w2_a, weight.device, intermediate_dtype))
@@ -210,11 +213,11 @@ class LoKrAdapter(WeightAdapterBase):
             alpha = 1.0
 
         try:
-            lora_diff = torch.kron(w1, w2).reshape(weight.shape)
+            lora_diff = Tensor.kron(w1, w2).reshape(weight.shape)
             if dora_scale is not None:
                 weight = weight_decompose(dora_scale, weight, lora_diff, alpha, strength, intermediate_dtype, function)
             else:
-                weight += function(((strength * alpha) * lora_diff).type(weight.dtype))
+                weight += function(((strength * alpha) * lora_diff).cast(weight.dtype))
         except Exception as e:
             logging.error("ERROR {} {} {}".format(self.name, key, e))
         return weight

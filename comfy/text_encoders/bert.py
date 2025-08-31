@@ -1,10 +1,9 @@
-import torch
+from tinygrad import Tensor
 from comfy.ldm.modules.attention import optimized_attention_for_device
 import comfy.ops
 
-class BertAttention(torch.nn.Module):
+class BertAttention:
     def __init__(self, embed_dim, heads, dtype, device, operations):
-        super().__init__()
 
         self.heads = heads
         self.query = operations.Linear(embed_dim, embed_dim, bias=True, dtype=dtype, device=device)
@@ -20,9 +19,8 @@ class BertAttention(torch.nn.Module):
         out = optimized_attention(q, k, v, self.heads, mask)
         return out
 
-class BertOutput(torch.nn.Module):
+class BertOutput:
     def __init__(self, input_dim, output_dim, layer_norm_eps, dtype, device, operations):
-        super().__init__()
         self.dense = operations.Linear(input_dim, output_dim, dtype=dtype, device=device)
         self.LayerNorm = operations.LayerNorm(output_dim, eps=layer_norm_eps, dtype=dtype, device=device)
         # self.dropout = nn.Dropout(0.0)
@@ -33,9 +31,8 @@ class BertOutput(torch.nn.Module):
         x = self.LayerNorm(x + y)
         return x
 
-class BertAttentionBlock(torch.nn.Module):
+class BertAttentionBlock:
     def __init__(self, embed_dim, heads, layer_norm_eps, dtype, device, operations):
-        super().__init__()
         self.self = BertAttention(embed_dim, heads, dtype, device, operations)
         self.output = BertOutput(embed_dim, embed_dim, layer_norm_eps, dtype, device, operations)
 
@@ -43,19 +40,17 @@ class BertAttentionBlock(torch.nn.Module):
         y = self.self(x, mask, optimized_attention)
         return self.output(y, x)
 
-class BertIntermediate(torch.nn.Module):
+class BertIntermediate:
     def __init__(self, embed_dim, intermediate_dim, dtype, device, operations):
-        super().__init__()
         self.dense = operations.Linear(embed_dim, intermediate_dim, dtype=dtype, device=device)
 
     def forward(self, x):
         x = self.dense(x)
-        return torch.nn.functional.gelu(x)
+        return x.gelu()
 
 
-class BertBlock(torch.nn.Module):
+class BertBlock:
     def __init__(self, embed_dim, intermediate_dim, heads, layer_norm_eps, dtype, device, operations):
-        super().__init__()
         self.attention = BertAttentionBlock(embed_dim, heads, layer_norm_eps, dtype, device, operations)
         self.intermediate = BertIntermediate(embed_dim, intermediate_dim, dtype, device, operations)
         self.output = BertOutput(intermediate_dim, embed_dim, layer_norm_eps, dtype, device, operations)
@@ -65,10 +60,9 @@ class BertBlock(torch.nn.Module):
         y = self.intermediate(x)
         return self.output(y, x)
 
-class BertEncoder(torch.nn.Module):
+class BertEncoder:
     def __init__(self, num_layers, embed_dim, intermediate_dim, heads, layer_norm_eps, dtype, device, operations):
-        super().__init__()
-        self.layer = torch.nn.ModuleList([BertBlock(embed_dim, intermediate_dim, heads, layer_norm_eps, dtype, device, operations) for i in range(num_layers)])
+        self.layer = [BertBlock(embed_dim, intermediate_dim, heads, layer_norm_eps, dtype, device, operations) for i in range(num_layers)]
 
     def forward(self, x, mask=None, intermediate_output=None):
         optimized_attention = optimized_attention_for_device(x.device, mask=mask is not None, small_input=True)
@@ -81,12 +75,11 @@ class BertEncoder(torch.nn.Module):
         for i, l in enumerate(self.layer):
             x = l(x, mask, optimized_attention)
             if i == intermediate_output:
-                intermediate = x.clone()
+                intermediate = x.detach()
         return x, intermediate
 
-class BertEmbeddings(torch.nn.Module):
+class BertEmbeddings:
     def __init__(self, vocab_size, max_position_embeddings, type_vocab_size, pad_token_id, embed_dim, layer_norm_eps, dtype, device, operations):
-        super().__init__()
         self.word_embeddings = operations.Embedding(vocab_size, embed_dim, padding_idx=pad_token_id, dtype=dtype, device=device)
         self.position_embeddings = operations.Embedding(max_position_embeddings, embed_dim, dtype=dtype, device=device)
         self.token_type_embeddings = operations.Embedding(type_vocab_size, embed_dim, dtype=dtype, device=device)
@@ -107,9 +100,8 @@ class BertEmbeddings(torch.nn.Module):
         return x
 
 
-class BertModel_(torch.nn.Module):
+class BertModel_:
     def __init__(self, config_dict, dtype, device, operations):
-        super().__init__()
         embed_dim = config_dict["hidden_size"]
         layer_norm_eps = config_dict["layer_norm_eps"]
 
@@ -121,15 +113,14 @@ class BertModel_(torch.nn.Module):
         mask = None
         if attention_mask is not None:
             mask = 1.0 - attention_mask.to(x.dtype).reshape((attention_mask.shape[0], 1, -1, attention_mask.shape[-1])).expand(attention_mask.shape[0], 1, attention_mask.shape[-1], attention_mask.shape[-1])
-            mask = mask.masked_fill(mask.to(torch.bool), -torch.finfo(x.dtype).max)
+            mask = mask.masked_fill(mask.bool(), -float('inf'))
 
         x, i = self.encoder(x, mask, intermediate_output)
         return x, i
 
 
-class BertModel(torch.nn.Module):
+class BertModel:
     def __init__(self, config_dict, dtype, device, operations):
-        super().__init__()
         self.bert = BertModel_(config_dict, dtype, device, operations)
         self.num_layers = config_dict["num_hidden_layers"]
 

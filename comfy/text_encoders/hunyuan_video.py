@@ -2,7 +2,7 @@ from comfy import sd1_clip
 import comfy.model_management
 import comfy.text_encoders.llama
 from transformers import LlamaTokenizerFast
-import torch
+from tinygrad import Tensor
 import os
 import numbers
 
@@ -73,9 +73,8 @@ class HunyuanVideoTokenizer:
         return {}
 
 
-class HunyuanVideoClipModel(torch.nn.Module):
+class HunyuanVideoClipModel:
     def __init__(self, dtype_llama=None, device="cpu", dtype=None, model_options={}):
-        super().__init__()
         dtype_llama = comfy.model_management.pick_weight_dtype(dtype_llama, dtype, device)
         self.clip_l = sd1_clip.SDClipModel(device=device, dtype=dtype, return_projected_pooled=False, model_options=model_options)
         self.llama = LLAMAModel(device=device, dtype=dtype_llama, model_options=model_options)
@@ -104,7 +103,7 @@ class HunyuanVideoClipModel(torch.nn.Module):
         tok_pairs = token_weight_pairs_llama[0]
         for i, v in enumerate(tok_pairs):
             elem = v[0]
-            if not torch.is_tensor(elem):
+            if not isinstance(elem, Tensor):
                 if isinstance(elem, numbers.Integral):
                     if elem == 128006:
                         if tok_pairs[i + 1][0] == 882:
@@ -130,14 +129,14 @@ class HunyuanVideoClipModel(torch.nn.Module):
                 template_end += 2
         llama_output = llama_out[:, template_end + extra_sizes:user_end + extra_sizes + extra_template_end]
         llama_extra_out["attention_mask"] = llama_extra_out["attention_mask"][:, template_end + extra_sizes:user_end + extra_sizes + extra_template_end]
-        if llama_extra_out["attention_mask"].sum() == torch.numel(llama_extra_out["attention_mask"]):
+        if llama_extra_out["attention_mask"].sum() == llama_extra_out["attention_mask"].numel():
             llama_extra_out.pop("attention_mask")  # attention mask is useless if no masked elements
 
         if len(images) > 0:
             out = []
             for i in images:
                 out.append(llama_out[:, i[0]: i[1]: i[2]])
-            llama_output = torch.cat(out + [llama_output], dim=1)
+            llama_output = Tensor.cat(*out, llama_output, dim=1)
 
         l_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
         return llama_output, l_pooled, llama_extra_out

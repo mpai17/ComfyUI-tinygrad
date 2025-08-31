@@ -3,7 +3,7 @@ from .spiece_tokenizer import SPieceTokenizer
 import comfy.text_encoders.t5
 import os
 import re
-import torch
+from tinygrad import Tensor
 import logging
 
 from tokenizers import Tokenizer
@@ -126,9 +126,8 @@ class AceT5Tokenizer:
     def state_dict(self):
         return self.umt5base.state_dict()
 
-class AceT5Model(torch.nn.Module):
+class AceT5Model:
     def __init__(self, device="cpu", dtype=None, model_options={}, **kwargs):
-        super().__init__()
         self.umt5base = UMT5BaseModel(device=device, dtype=dtype, model_options=model_options)
         self.dtypes = set()
         if dtype is not None:
@@ -146,7 +145,7 @@ class AceT5Model(torch.nn.Module):
 
         t5_out, t5_pooled = self.umt5base.encode_token_weights(token_weight_pairs_umt5base)
 
-        lyrics_embeds = torch.tensor(list(map(lambda a: a[0], token_weight_pairs_lyrics[0]))).unsqueeze(0)
+        lyrics_embeds = Tensor(list(map(lambda a: a[0], token_weight_pairs_lyrics[0]))).unsqueeze(0)
         return t5_out, None, {"conditioning_lyrics": lyrics_embeds}
 
     def load_sd(self, sd):

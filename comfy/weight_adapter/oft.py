@@ -1,60 +1,62 @@
 import logging
 from typing import Optional
 
-import torch
+from tinygrad import Tensor, dtypes
 import comfy.model_management
-from .base import WeightAdapterBase, WeightAdapterTrainBase, weight_decompose, factorization
+from .base import WeightAdapterBase, weight_decompose, factorization
 
 
-class OFTDiff(WeightAdapterTrainBase):
+class OFTDiff:
     def __init__(self, weights):
-        super().__init__()
-        # Unpack weights tuple from LoHaAdapter
+        # Unpack weights tuple from adapter
         blocks, rescale, alpha, _ = weights
 
-        # Create trainable parameters
-        self.oft_blocks = torch.nn.Parameter(blocks)
+        # Store tensors
+        self.oft_blocks = blocks
         if rescale is not None:
-            self.rescale = torch.nn.Parameter(rescale)
+            self.rescale = rescale
             self.rescaled = True
         else:
             self.rescaled = False
         self.block_num, self.block_size, _ = blocks.shape
-        self.constraint = float(alpha)
-        self.alpha = torch.nn.Parameter(torch.tensor(alpha), requires_grad=False)
+        self.constraint = float(alpha) if isinstance(alpha, (int, float)) else alpha.item()
+        self.alpha = alpha if isinstance(alpha, (int, float)) else alpha.item()
 
     def __call__(self, w):
         org_dtype = w.dtype
-        I = torch.eye(self.block_size, device=self.oft_blocks.device)
+        I = Tensor.eye(self.block_size)
 
         ## generate r
         # for Q = -Q^T
         q = self.oft_blocks - self.oft_blocks.transpose(1, 2)
         normed_q = q
         if self.constraint:
-            q_norm = torch.norm(q) + 1e-8
+            q_norm = q.norm() + 1e-8
             if q_norm > self.constraint:
                 normed_q = q * self.constraint / q_norm
         # use float() to prevent unsupported type
-        r = (I + normed_q) @ (I - normed_q).float().inverse()
+        r = (I + normed_q) @ (I - normed_q).cast(dtypes.float32).inverse()
 
         ## Apply chunked matmul on weight
         _, *shape = w.shape
-        org_weight = w.to(dtype=r.dtype)
+        org_weight = w.cast(r.dtype)
         org_weight = org_weight.unflatten(0, (self.block_num, self.block_size))
         # Init R=0, so add I on it to ensure the output of step0 is original model output
-        weight = torch.einsum(
+        weight = Tensor.einsum(
             "k n m, k n ... -> k m ...",
             r,
             org_weight,
         ).flatten(0, 1)
         if self.rescaled:
             weight = self.rescale * weight
-        return weight.to(org_dtype)
+        return weight.cast(org_dtype)
 
     def passive_memory_usage(self):
         """Calculates memory usage of the trainable parameters."""
-        return sum(param.numel() * param.element_size() for param in self.parameters())
+        total_size = self.oft_blocks.numel() * self.oft_blocks.dtype.itemsize
+        if self.rescaled:
+            total_size += self.rescale.numel() * self.rescale.dtype.itemsize
+        return total_size
 
 
 class OFTAdapter(WeightAdapterBase):
@@ -68,7 +70,7 @@ class OFTAdapter(WeightAdapterBase):
     def create_train(cls, weight, rank=1, alpha=1.0):
         out_dim = weight.shape[0]
         block_size, block_num = factorization(out_dim, rank)
-        block = torch.zeros(block_num, block_size, block_size, device=weight.device, dtype=weight.dtype)
+        block = Tensor.zeros(block_num, block_size, block_size)
         return OFTDiff(
             (block, None, alpha, None)
         )
@@ -80,9 +82,9 @@ class OFTAdapter(WeightAdapterBase):
     def load(
         cls,
         x: str,
-        lora: dict[str, torch.Tensor],
+        lora: dict[str, Tensor],
         alpha: float,
-        dora_scale: torch.Tensor,
+        dora_scale: Tensor,
         loaded_keys: set[str] = None,
     ) -> Optional["OFTAdapter"]:
         if loaded_keys is None:
@@ -116,7 +118,7 @@ class OFTAdapter(WeightAdapterBase):
         strength_model,
         offset,
         function,
-        intermediate_dtype=torch.float32,
+        intermediate_dtype=dtypes.float32,
         original_weight=None,
     ):
         v = self.weights
@@ -135,27 +137,27 @@ class OFTAdapter(WeightAdapterBase):
 
         try:
             # Get r
-            I = torch.eye(block_size, device=blocks.device, dtype=blocks.dtype)
+            I = Tensor.eye(block_size).cast(blocks.dtype)
             # for Q = -Q^T
             q = blocks - blocks.transpose(1, 2)
             normed_q = q
             if alpha > 0: # alpha in oft/boft is for constraint
-                q_norm = torch.norm(q) + 1e-8
+                q_norm = q.norm() + 1e-8
                 if q_norm > alpha:
                     normed_q = q * alpha / q_norm
             # use float() to prevent unsupported type in .inverse()
-            r = (I + normed_q) @ (I - normed_q).float().inverse()
-            r = r.to(weight)
+            r = (I + normed_q) @ (I - normed_q).cast(dtypes.float32).inverse()
+            r = r.cast(weight.dtype)
             _, *shape = weight.shape
-            lora_diff = torch.einsum(
+            lora_diff = Tensor.einsum(
                 "k n m, k n ... -> k m ...",
                 (r * strength) - strength * I,
-                weight.view(block_num, block_size, *shape),
-            ).view(-1, *shape)
+                weight.reshape(block_num, block_size, *shape),
+            ).reshape(-1, *shape)
             if dora_scale is not None:
                 weight = weight_decompose(dora_scale, weight, lora_diff, alpha, strength, intermediate_dtype, function)
             else:
-                weight += function((strength * lora_diff).type(weight.dtype))
+                weight += function((strength * lora_diff).cast(weight.dtype))
         except Exception as e:
             logging.error("ERROR {} {} {}".format(self.name, key, e))
         return weight

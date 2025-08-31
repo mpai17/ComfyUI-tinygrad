@@ -2,7 +2,7 @@ from transformers import Qwen2Tokenizer
 from comfy import sd1_clip
 import comfy.text_encoders.llama
 import os
-import torch
+from tinygrad import Tensor
 import numbers
 
 class Qwen25_7BVLITokenizer(sd1_clip.SDTokenizer):
@@ -53,7 +53,7 @@ class QwenImageTEModel(sd1_clip.SD1ClipModel):
         count_im_start = 0
         for i, v in enumerate(tok_pairs):
             elem = v[0]
-            if not torch.is_tensor(elem):
+            if not isinstance(elem, Tensor):
                 if isinstance(elem, numbers.Integral):
                     if elem == 151644 and count_im_start < 2:
                         template_end = i
@@ -67,7 +67,7 @@ class QwenImageTEModel(sd1_clip.SD1ClipModel):
         out = out[:, template_end:]
 
         extra["attention_mask"] = extra["attention_mask"][:, template_end:]
-        if extra["attention_mask"].sum() == torch.numel(extra["attention_mask"]):
+        if extra["attention_mask"].sum() == extra["attention_mask"].numel():
             extra.pop("attention_mask")  # attention mask is useless if no masked elements
 
         return out, pooled, extra

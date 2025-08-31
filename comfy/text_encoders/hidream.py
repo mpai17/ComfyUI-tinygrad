@@ -3,7 +3,7 @@ from . import sd3_clip
 from comfy import sd1_clip
 from comfy import sdxl_clip
 import comfy.model_management
-import torch
+from tinygrad import Tensor
 import logging
 
 
@@ -30,9 +30,8 @@ class HiDreamTokenizer:
         return {}
 
 
-class HiDreamTEModel(torch.nn.Module):
+class HiDreamTEModel:
     def __init__(self, clip_l=True, clip_g=True, t5=True, llama=True, dtype_t5=None, dtype_llama=None, device="cpu", dtype=None, model_options={}):
-        super().__init__()
         self.dtypes = set()
         if clip_l:
             self.clip_l = sd1_clip.SDClipModel(device=device, dtype=dtype, return_projected_pooled=True, model_options=model_options)
@@ -97,14 +96,14 @@ class HiDreamTEModel(torch.nn.Module):
             if self.clip_l is not None:
                 lg_out, l_pooled = self.clip_l.encode_token_weights(token_weight_pairs_l)
             else:
-                l_pooled = torch.zeros((1, 768), device=comfy.model_management.intermediate_device())
+                l_pooled = Tensor.zeros(1, 768)
 
             if self.clip_g is not None:
                 g_out, g_pooled = self.clip_g.encode_token_weights(token_weight_pairs_g)
             else:
-                g_pooled = torch.zeros((1, 1280), device=comfy.model_management.intermediate_device())
+                g_pooled = Tensor.zeros(1, 1280)
 
-            pooled = torch.cat((l_pooled, g_pooled), dim=-1)
+            pooled = l_pooled.cat(g_pooled, dim=-1)
 
         if self.t5xxl is not None:
             t5_output = self.t5xxl.encode_token_weights(token_weight_pairs_t5)
@@ -120,13 +119,13 @@ class HiDreamTEModel(torch.nn.Module):
             ll_out = None
 
         if t5_out is None:
-            t5_out = torch.zeros((1, 128, 4096), device=comfy.model_management.intermediate_device())
+            t5_out = Tensor.zeros(1, 128, 4096)
 
         if ll_out is None:
-            ll_out = torch.zeros((1, 32, 1, 4096), device=comfy.model_management.intermediate_device())
+            ll_out = Tensor.zeros(1, 32, 1, 4096)
 
         if pooled is None:
-            pooled = torch.zeros((1, 768 + 1280), device=comfy.model_management.intermediate_device())
+            pooled = Tensor.zeros(1, 768 + 1280)
 
         extra["conditioning_llama3"] = ll_out
         return t5_out, pooled, extra

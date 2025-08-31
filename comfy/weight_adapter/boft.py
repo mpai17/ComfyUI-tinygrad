@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-import torch
+from tinygrad import Tensor, dtypes
 import comfy.model_management
 from .base import WeightAdapterBase, weight_decompose
 
@@ -17,9 +17,9 @@ class BOFTAdapter(WeightAdapterBase):
     def load(
         cls,
         x: str,
-        lora: dict[str, torch.Tensor],
+        lora: dict[str, Tensor],
         alpha: float,
-        dora_scale: torch.Tensor,
+        dora_scale: Tensor,
         loaded_keys: set[str] = None,
     ) -> Optional["BOFTAdapter"]:
         if loaded_keys is None:
@@ -53,7 +53,7 @@ class BOFTAdapter(WeightAdapterBase):
         strength_model,
         offset,
         function,
-        intermediate_dtype=torch.float32,
+        intermediate_dtype=dtypes.float32,
         original_weight=None,
     ):
         v = self.weights
@@ -70,16 +70,16 @@ class BOFTAdapter(WeightAdapterBase):
 
         try:
             # Get r
-            I = torch.eye(boft_b, device=blocks.device, dtype=blocks.dtype)
+            I = Tensor.eye(boft_b)
             # for Q = -Q^T
             q = blocks - blocks.transpose(-1, -2)
             normed_q = q
             if alpha > 0: # alpha in boft/bboft is for constraint
-                q_norm = torch.norm(q) + 1e-8
+                q_norm = q.norm() + 1e-8
                 if q_norm > alpha:
                     normed_q = q * alpha / q_norm
             # use float() to prevent unsupported type in .inverse()
-            r = (I + normed_q) @ (I - normed_q).float().inverse()
+            r = (I + normed_q) @ (I - normed_q).cast(dtypes.float).inverse()
             r = r.to(weight)
             inp = org = weight
 
@@ -96,7 +96,7 @@ class BOFTAdapter(WeightAdapterBase):
                     .flatten(0, 2)
                     .unflatten(0, (-1, boft_b))
                 )
-                inp = torch.einsum("b i j, b j ...-> b i ...", bi, inp)
+                inp = Tensor.einsum("bij,bj...->bi...", bi, inp)
                 inp = (
                     inp.flatten(0, 1).unflatten(0, (-1, k, g)).transpose(1, 2).flatten(0, 2)
                 )

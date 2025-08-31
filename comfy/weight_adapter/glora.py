@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-import torch
+from tinygrad import Tensor, dtypes
 import comfy.model_management
 from .base import WeightAdapterBase, weight_decompose
 
@@ -17,9 +17,9 @@ class GLoRAAdapter(WeightAdapterBase):
     def load(
         cls,
         x: str,
-        lora: dict[str, torch.Tensor],
+        lora: dict[str, Tensor],
         alpha: float,
-        dora_scale: torch.Tensor,
+        dora_scale: Tensor,
         loaded_keys: set[str] = None,
     ) -> Optional["GLoRAAdapter"]:
         if loaded_keys is None:
@@ -46,7 +46,7 @@ class GLoRAAdapter(WeightAdapterBase):
         strength_model,
         offset,
         function,
-        intermediate_dtype=torch.float32,
+        intermediate_dtype=dtypes.float32,
         original_weight=None,
     ):
         v = self.weights
@@ -76,13 +76,13 @@ class GLoRAAdapter(WeightAdapterBase):
 
         try:
             if old_glora:
-                lora_diff = (torch.mm(b2, b1) + torch.mm(torch.mm(weight.flatten(start_dim=1).to(dtype=intermediate_dtype), a2), a1)).reshape(weight.shape) #old lycoris glora
+                lora_diff = (b2 @ b1 + ((weight.flatten(start_dim=1).cast(intermediate_dtype) @ a2) @ a1)).reshape(weight.shape) #old lycoris glora
             else:
-                if weight.dim() > 2:
-                    lora_diff = torch.einsum("o i ..., i j -> o j ...", torch.einsum("o i ..., i j -> o j ...", weight.to(dtype=intermediate_dtype), a1), a2).reshape(weight.shape)
+                if weight.ndim > 2:
+                    lora_diff = Tensor.einsum("oi...,ij->oj...", Tensor.einsum("oi...,ij->oj...", weight.cast(intermediate_dtype), a1), a2).reshape(weight.shape)
                 else:
-                    lora_diff = torch.mm(torch.mm(weight.to(dtype=intermediate_dtype), a1), a2).reshape(weight.shape)
-                lora_diff += torch.mm(b1, b2).reshape(weight.shape)
+                    lora_diff = ((weight.cast(intermediate_dtype) @ a1) @ a2).reshape(weight.shape)
+                lora_diff += (b1 @ b2).reshape(weight.shape)
 
             if dora_scale is not None:
                 weight = weight_decompose(dora_scale, weight, lora_diff, alpha, strength, intermediate_dtype, function)

@@ -4,8 +4,6 @@ from .spiece_tokenizer import SPieceTokenizer
 from .bert import BertModel
 import comfy.text_encoders.t5
 import os
-import torch
-
 class HyditBertModel(sd1_clip.SDClipModel):
     def __init__(self, device="cpu", layer="last", layer_idx=None, dtype=None, model_options={}):
         textmodel_json_config = os.path.join(os.path.dirname(os.path.realpath(__file__)), "hydit_clip.json")
@@ -51,9 +49,8 @@ class HyditTokenizer:
     def state_dict(self):
         return {"mt5xl.spiece_model": self.mt5xl.state_dict()["spiece_model"]}
 
-class HyditModel(torch.nn.Module):
+class HyditModel:
     def __init__(self, device="cpu", dtype=None, model_options={}):
-        super().__init__()
         self.hydit_clip = HyditBertModel(dtype=dtype, model_options=model_options)
         self.mt5xl = MT5XLModel(dtype=dtype, model_options=model_options)
 
